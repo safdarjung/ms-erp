@@ -1,0 +1,27 @@
+{
+  "name": "ms-erp",
+  "private": true,
+  "version": "0.0.1",
+  "description": "AI-native ERP for a precision die & machining job-shop (MS Enterprises).",
+  "packageManager": "pnpm@11.10.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "infra:up": "docker compose up -d",
+    "infra:down": "docker compose down",
+    "db:setup": "pnpm --filter @ms/db setup",
+    "db:generate": "pnpm --filter @ms/db generate",
+    "db:migrate": "pnpm --filter @ms/db migrate",
+    "db:seed": "pnpm --filter @ms/db seed",
+    "bootstrap": "pnpm install && pnpm infra:up && pnpm --filter @ms/db setup"
+  },
+  "devDependencies": {
+    "turbo": "^2.3.3",
+    "typescript": "^5.7.3"
+  }
+}

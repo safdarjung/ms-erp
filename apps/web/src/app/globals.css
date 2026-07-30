@@ -1,0 +1,61 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #eaeef2;
+  --surface: #ffffff;
+  --surface-2: #f3f6f9;
+  --ink: #141a21;
+  --muted: #55606d;
+  --faint: #8792a0;
+  --line: #dce3ea;
+  --line-strong: #c2ccd6;
+  --accent: #a65b12;
+  --accent-soft: #f5ead9;
+  --steel: #2e5c86;
+  --ok: #2c7a56;
+  --warn: #8f6714;
+  --crit: #b23f2c;
+}
+
+@layer base {
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    -webkit-font-smoothing: antialiased;
+  }
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 3px;
+  }
+}
+
+@layer components {
+  .eyebrow {
+    @apply font-mono text-[0.68rem] uppercase tracking-[0.12em] text-accent font-semibold;
+  }
+  .card {
+    @apply bg-surface border border-line rounded-lg;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded font-medium text-sm px-3.5 py-2 transition-colors;
+  }
+  .btn-primary {
+    @apply btn bg-accent text-white hover:opacity-90;
+  }
+  .btn-ghost {
+    @apply btn border border-line-strong text-ink bg-surface hover:bg-surface-2;
+  }
+  .field {
+    @apply w-full rounded border border-line-strong bg-surface px-3 py-2 text-sm text-ink placeholder:text-faint
+      focus:outline-none focus:ring-1 focus:ring-accent focus:border-accent;
+  }
+  .label {
+    @apply block text-xs font-medium text-muted mb-1;
+  }
+  .pill {
+    @apply inline-flex items-center gap-1.5 rounded-full text-xs font-medium px-2.5 py-0.5;
+  }
+}

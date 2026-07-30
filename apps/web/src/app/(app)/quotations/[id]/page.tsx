@@ -1,0 +1,97 @@
+import Link from 'next/link';
+import { notFound } from 'next/navigation';
+import { formatINR } from '@ms/core';
+import { getQuotation } from '@/lib/queries';
+import { requireUser, can } from '@/lib/rbac';
+import { formatDate } from '@/lib/format';
+import { convertToInvoiceAction } from '../actions';
+
+export default async function QuotationDetail({ params }: { params: Promise<{ id: string }> }) {
+  const user = await requireUser();
+  const { id } = await params;
+  const data = await getQuotation(id);
+  if (!data?.quotation) notFound();
+  const { quotation: q, items, customer: cust } = data;
+  const converted = !!q.convertedInvoiceId;
+
+  return (
+    <div className="max-w-4xl">
+      <p className="eyebrow">Sales</p>
+      <div className="flex items-center justify-between mb-6 gap-4 flex-wrap">
+        <div className="flex items-center gap-3">
+          <h1 className="text-2xl font-semibold tracking-tight font-mono">{q.number}</h1>
+          <span className={`pill capitalize ${converted ? 'bg-[#e4f1ea] text-ok' : 'bg-surface-2 text-muted'}`}>{q.status}</span>
+        </div>
+        <div className="flex gap-2">
+          <a href={`/print/quotation/${q.id}?print=1`} target="_blank" rel="noreferrer" className="btn-ghost">Print / PDF</a>
+          {converted ? (
+            <Link href={`/invoices/${q.convertedInvoiceId}`} className="btn-primary">View invoice →</Link>
+          ) : (
+            can(user, 'invoice.create') && (
+              <form action={convertToInvoiceAction}>
+                <input type="hidden" name="quotationId" value={q.id} />
+                <button className="btn-primary">Convert to invoice</button>
+              </form>
+            )
+          )}
+        </div>
+      </div>
+
+      <div className="grid md:grid-cols-2 gap-4 mb-4">
+        <div className="card p-4 text-sm">
+          <div className="text-faint text-xs uppercase mb-1">Customer</div>
+          <div className="font-medium text-ink">{cust?.name ?? '—'}</div>
+          {cust?.address && <div className="text-muted">{cust.address}</div>}
+          {cust?.gstin && <div className="font-mono text-xs mt-1">GST: {cust.gstin}</div>}
+        </div>
+        <div className="card p-4 text-sm">
+          <div className="flex justify-between py-0.5"><span className="text-muted">Date</span><span>{formatDate(q.docDate)}</span></div>
+          <div className="flex justify-between py-0.5"><span className="text-muted">Validity</span><span>{q.validityDays} days</span></div>
+          <div className="flex justify-between py-0.5"><span className="text-muted">Tax</span><span>{q.isInterstate ? 'IGST (inter-state)' : 'CGST + SGST (intra-state)'}</span></div>
+        </div>
+      </div>
+
+      <div className="card overflow-x-auto mb-4">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-faint border-b border-line text-xs uppercase [&>th]:px-4 [&>th]:py-2 [&>th]:font-medium">
+              <th>#</th><th>Description</th><th>HSN</th><th className="text-right">Qty</th><th className="text-right">Rate</th><th className="text-right">Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((it, i) => (
+              <tr key={it.id} className="border-b border-line last:border-0 [&>td]:px-4 [&>td]:py-2">
+                <td>{i + 1}</td>
+                <td className="text-ink">
+                  {it.description}
+                  {it.isToolingCharge && <span className="pill bg-accent-soft text-accent ml-2 text-[0.65rem]">tooling / NRE</span>}
+                </td>
+                <td className="font-mono text-xs">{it.hsn ?? '—'}</td>
+                <td className="text-right tabular-nums">{Number(it.qty)}</td>
+                <td className="text-right tabular-nums font-mono">{formatINR(it.rate)}</td>
+                <td className="text-right tabular-nums font-mono">{formatINR(it.taxableValue)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="flex justify-end">
+        <div className="card p-4 w-full md:w-80 text-sm">
+          <div className="flex justify-between py-1"><span className="text-muted">Taxable</span><span className="tabular-nums font-mono">{formatINR(q.subtotal)}</span></div>
+          {q.isInterstate ? (
+            <div className="flex justify-between py-1"><span className="text-muted">IGST</span><span className="tabular-nums font-mono">{formatINR(q.igst)}</span></div>
+          ) : (
+            <>
+              <div className="flex justify-between py-1"><span className="text-muted">CGST</span><span className="tabular-nums font-mono">{formatINR(q.cgst)}</span></div>
+              <div className="flex justify-between py-1"><span className="text-muted">SGST</span><span className="tabular-nums font-mono">{formatINR(q.sgst)}</span></div>
+            </>
+          )}
+          <div className="flex justify-between py-2 mt-1 border-t border-line font-semibold"><span>G. Total</span><span className="tabular-nums font-mono">{formatINR(q.grandTotal)}</span></div>
+        </div>
+      </div>
+
+      <div className="mt-4"><Link href="/quotations" className="text-steel text-sm hover:underline">← All quotations</Link></div>
+    </div>
+  );
+}
