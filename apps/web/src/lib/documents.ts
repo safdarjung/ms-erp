@@ -73,6 +73,88 @@ export async function insertInvoiceTx(
   return { id: inv!.id, number, grand: totals.grand };
 }
 
+export type DocEdit = {
+  docDate?: string;
+  validityDays?: number;
+  poRef?: string;
+  terms?: string;
+  notes?: string;
+  /** When present, REPLACES all line items; totals recompute deterministically. */
+  items?: {
+    description: string; hsn?: string; qty: number; uom: string;
+    rate: number; gstRate: number; isToolingCharge?: boolean;
+  }[];
+};
+
+/** Edit a quotation in place (same number). Items replace wholesale; GST recomputes. */
+export async function updateQuotationTx(
+  tx: Tx, u: U, id: string, d: DocEdit,
+): Promise<{ number: string; grand: number }> {
+  const [q] = await tx.select().from(quotation).where(eq(quotation.id, id)).limit(1);
+  if (!q) throw new Error('Quotation not found');
+  if (q.convertedInvoiceId) throw new Error(`${q.number} is converted to an invoice and locked.`);
+
+  const set: Record<string, unknown> = { updatedAt: new Date() };
+  if (d.docDate !== undefined) set.docDate = new Date(d.docDate);
+  if (d.validityDays !== undefined) set.validityDays = d.validityDays;
+  if (d.terms !== undefined) set.terms = d.terms;
+  if (d.notes !== undefined) set.notes = d.notes;
+
+  let grand = Number(q.grandTotal);
+  if (d.items) {
+    const interstate = q.isInterstate;
+    const totals = computeGst(d.items, interstate);
+    grand = totals.grand;
+    set.subtotal = String(totals.subtotal);
+    set.cgst = String(totals.cgst);
+    set.sgst = String(totals.sgst);
+    set.igst = String(totals.igst);
+    set.grandTotal = String(totals.grand);
+    await tx.delete(quotationItem).where(eq(quotationItem.quotationId, id));
+    await tx.insert(quotationItem).values(d.items.map((it, i) => ({
+      tenantId: u.tenantId, quotationId: id, seq: i + 1, description: it.description, hsn: it.hsn,
+      qty: String(it.qty), uom: it.uom, rate: String(it.rate), gstRate: String(it.gstRate),
+      taxableValue: String(r2(it.qty * it.rate)), isToolingCharge: it.isToolingCharge ?? false,
+    })));
+  }
+  await tx.update(quotation).set(set).where(eq(quotation.id, id));
+  return { number: q.number, grand };
+}
+
+/** Edit a tax invoice in place (same number). Items replace wholesale; GST recomputes. */
+export async function updateInvoiceTx(
+  tx: Tx, u: U, id: string, d: DocEdit,
+): Promise<{ number: string; grand: number }> {
+  const [inv] = await tx.select().from(taxInvoice).where(eq(taxInvoice.id, id)).limit(1);
+  if (!inv) throw new Error('Invoice not found');
+  if (inv.status === 'cancelled') throw new Error(`${inv.number} is cancelled and locked.`);
+
+  const set: Record<string, unknown> = { updatedAt: new Date() };
+  if (d.docDate !== undefined) set.docDate = new Date(d.docDate);
+  if (d.poRef !== undefined) set.poRef = d.poRef;
+  if (d.terms !== undefined) set.terms = d.terms;
+  if (d.notes !== undefined) set.notes = d.notes;
+
+  let grand = Number(inv.grandTotal);
+  if (d.items) {
+    const totals = computeGst(d.items, inv.isInterstate);
+    grand = totals.grand;
+    set.subtotal = String(totals.subtotal);
+    set.cgst = String(totals.cgst);
+    set.sgst = String(totals.sgst);
+    set.igst = String(totals.igst);
+    set.grandTotal = String(totals.grand);
+    await tx.delete(taxInvoiceItem).where(eq(taxInvoiceItem.invoiceId, id));
+    await tx.insert(taxInvoiceItem).values(d.items.map((it, i) => ({
+      tenantId: u.tenantId, invoiceId: id, seq: i + 1, description: it.description, hsn: it.hsn,
+      qty: String(it.qty), uom: it.uom, rate: String(it.rate), gstRate: String(it.gstRate),
+      taxableValue: String(r2(it.qty * it.rate)),
+    })));
+  }
+  await tx.update(taxInvoice).set(set).where(eq(taxInvoice.id, id));
+  return { number: inv.number, grand };
+}
+
 /** Quotation → tax invoice. Idempotent: an already-converted quotation returns its invoice. */
 export async function convertQuotationTx(
   tx: Tx, u: U, quotationId: string,

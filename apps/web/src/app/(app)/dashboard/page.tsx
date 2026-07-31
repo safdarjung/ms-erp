@@ -41,7 +41,7 @@ function RecentDocs({
       {rows.length === 0 ? (
         <div className="px-4 py-6 text-sm text-muted">{empty}</div>
       ) : (
-        <table className="w-full text-sm">
+        <table className="w-full text-sm min-w-[640px]">
           <tbody>
             {rows.map((r) => (
               <tr key={r.id} className="border-b border-line last:border-0 hover:bg-surface-2/50">

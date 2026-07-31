@@ -42,7 +42,7 @@ export default async function LeadsPage({
       />
 
       <div className="card overflow-x-auto">
-        <table className="w-full text-sm">
+        <table className="w-full text-sm min-w-[640px]">
           <thead>
             <tr className="text-left text-faint border-b border-line text-xs uppercase tracking-wide [&>th]:px-4 [&>th]:py-2.5 [&>th]:font-medium">
               <th>Source</th><th>Customer</th><th>Requirement</th>

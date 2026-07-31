@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { revalidatePath } from 'next/cache';
 import {
   computeGst, isInterstate, formatINR,
-  customerInput, leadInput, quotationInput, invoiceInput,
+  customerInput, leadInput, quotationInput, invoiceInput, quotationItemInput, invoiceItemInput,
   INVOICE_STATUSES, LEAD_ACTIVITY_TYPES, LEAD_STAGE_LABELS, QUOTATION_SETTABLE_STATUSES,
   type LeadStage,
 } from '@ms/core';
@@ -13,7 +13,10 @@ import {
 } from '@ms/db';
 import type { StageResult, StagedAction } from '@ms/ai';
 import type { CurrentUser } from './auth';
-import { convertQuotationTx, getSupplierStateCode, insertInvoiceTx, insertQuotationTx } from './documents';
+import {
+  convertQuotationTx, getSupplierStateCode, insertInvoiceTx, insertQuotationTx,
+  updateInvoiceTx, updateQuotationTx,
+} from './documents';
 
 // The AI agent's write path (docs/05 §5 human-in-the-loop). `stageAction`
 // validates a proposed write and parks it as a pending `ai_action` row with a
@@ -45,6 +48,22 @@ const logActivityInput = z.object({
 const quotationStatusInput = z.object({ id: uuidField, status: z.enum(QUOTATION_SETTABLE_STATUSES) });
 const invoiceStatusInput = z.object({ id: uuidField, status: z.enum(INVOICE_STATUSES) });
 const convertQuotationInput = z.object({ quotationId: uuidField });
+const updateQuotationDocInput = z.object({
+  id: uuidField,
+  docDate: dateOnly.optional(),
+  validityDays: z.coerce.number().int().min(1).max(365).optional(),
+  terms: z.string().trim().max(4000).optional(),
+  notes: z.string().trim().max(2000).optional(),
+  items: z.array(quotationItemInput).min(1, 'Items must have at least one line').optional(),
+});
+const updateInvoiceDocInput = z.object({
+  id: uuidField,
+  docDate: dateOnly.optional(),
+  poRef: z.string().trim().max(40).optional(),
+  terms: z.string().trim().max(4000).optional(),
+  notes: z.string().trim().max(2000).optional(),
+  items: z.array(invoiceItemInput).min(1, 'Items must have at least one line').optional(),
+});
 
 const todayIST = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
 
@@ -241,6 +260,34 @@ async function buildStage(tx: Tx, kind: string, input: Record<string, unknown>):
         details: [{ label: 'Status', value: `${q.status} → ${d.status}` }],
       };
     }
+    case 'update_quotation': {
+      const d = parseOrThrow(updateQuotationDocInput, {
+        ...input, terms: realNewlines(input.terms), notes: realNewlines(input.notes),
+      });
+      if (d.items && d.items.length > MAX_AI_ITEMS) throw new Error(`Too many items (max ${MAX_AI_ITEMS}).`);
+      if (d.docDate === undefined && d.validityDays === undefined && d.terms === undefined
+        && d.notes === undefined && !d.items) {
+        throw new Error('Nothing to change — pass at least one field.');
+      }
+      const [q] = await tx.select().from(quotation).where(eq(quotation.id, d.id)).limit(1);
+      if (!q) throw new Error('Quotation not found — look the uuid up with a query first.');
+      if (q.convertedInvoiceId) throw new Error(`${q.number} is converted to an invoice and locked.`);
+      const details: KV[] = [];
+      if (d.docDate) push(details, 'Date', `${q.docDate.toISOString().slice(0, 10)} → ${d.docDate}`);
+      if (d.validityDays !== undefined) push(details, 'Validity', `${q.validityDays} → ${d.validityDays} days`);
+      if (d.terms !== undefined) push(details, 'Terms', 'replaced');
+      if (d.notes !== undefined) push(details, 'Notes', 'replaced');
+      let items: string[] | undefined;
+      if (d.items) {
+        docTotalsDetails(details, q.isInterstate, d.items);
+        push(details, 'Previous total', formatINR(q.grandTotal));
+        items = docItemsPreview(d.items);
+      }
+      return {
+        payload: d, title: `Edit quotation ${q.number}`, details, items,
+        warning: d.items ? `Replaces all existing line items of ${q.number}; totals recompute.` : undefined,
+      };
+    }
     case 'convert_quotation_to_invoice': {
       const d = parseOrThrow(convertQuotationInput, input);
       const [q] = await tx.select().from(quotation).where(eq(quotation.id, d.quotationId)).limit(1);
@@ -288,6 +335,38 @@ async function buildStage(tx: Tx, kind: string, input: Record<string, unknown>):
         payload: d, title: `Mark invoice ${inv.number} as ${d.status}`,
         details: [{ label: 'Status', value: `${inv.status} → ${d.status}` }],
         warning: d.status === 'cancelled' ? 'Cancelling an issued GST invoice — make sure it has not been filed.' : undefined,
+      };
+    }
+    case 'update_invoice': {
+      const d = parseOrThrow(updateInvoiceDocInput, {
+        ...input, terms: realNewlines(input.terms), notes: realNewlines(input.notes),
+      });
+      if (d.items && d.items.length > MAX_AI_ITEMS) throw new Error(`Too many items (max ${MAX_AI_ITEMS}).`);
+      if (d.docDate === undefined && d.poRef === undefined && d.terms === undefined
+        && d.notes === undefined && !d.items) {
+        throw new Error('Nothing to change — pass at least one field.');
+      }
+      const [inv] = await tx.select().from(taxInvoice).where(eq(taxInvoice.id, d.id)).limit(1);
+      if (!inv) throw new Error('Invoice not found — look the uuid up with a query first.');
+      if (inv.status === 'cancelled') throw new Error(`${inv.number} is cancelled and locked.`);
+      const details: KV[] = [];
+      if (d.docDate) push(details, 'Date', `${inv.docDate.toISOString().slice(0, 10)} → ${d.docDate}`);
+      if (d.poRef !== undefined) push(details, 'PO ref', `${inv.poRef ?? '—'} → ${d.poRef || '—'}`);
+      if (d.terms !== undefined) push(details, 'Terms', 'replaced');
+      if (d.notes !== undefined) push(details, 'Notes', 'replaced');
+      let items: string[] | undefined;
+      if (d.items) {
+        docTotalsDetails(details, inv.isInterstate, d.items);
+        push(details, 'Previous total', formatINR(inv.grandTotal));
+        items = docItemsPreview(d.items);
+      }
+      const warnings = [
+        d.items ? `Amends issued GST invoice ${inv.number} — all line items are replaced and tax figures recompute.` : undefined,
+        inv.status === 'paid' ? 'This invoice is marked PAID — changing amounts may mismatch the payment.' : undefined,
+      ].filter(Boolean);
+      return {
+        payload: d, title: `Edit invoice ${inv.number}`, details, items,
+        warning: warnings.length ? warnings.join(' ') : undefined,
       };
     }
     default:
@@ -468,6 +547,24 @@ async function performAction(tx: Tx, u: U, kind: string, payload: unknown): Prom
         message: `Quotation ${q.number} marked ${d.status}.`,
         entity: { type: 'quotation', id: d.id }, path: `/quotations/${d.id}`,
         revalidate: ['/quotations', `/quotations/${d.id}`, '/dashboard'],
+      };
+    }
+    case 'update_quotation': {
+      const { id, ...rest } = updateQuotationDocInput.parse(payload);
+      const res = await updateQuotationTx(tx, u, id, rest);
+      return {
+        message: `Quotation ${res.number} updated — ${formatINR(res.grand)} incl. GST. PDF: /print/quotation/${id}`,
+        entity: { type: 'quotation', id }, path: `/quotations/${id}`,
+        revalidate: ['/quotations', `/quotations/${id}`, '/dashboard'],
+      };
+    }
+    case 'update_invoice': {
+      const { id, ...rest } = updateInvoiceDocInput.parse(payload);
+      const res = await updateInvoiceTx(tx, u, id, rest);
+      return {
+        message: `Invoice ${res.number} updated — ${formatINR(res.grand)} incl. GST. PDF: /print/invoice/${id}`,
+        entity: { type: 'invoice', id }, path: `/invoices/${id}`,
+        revalidate: ['/invoices', `/invoices/${id}`, '/dashboard'],
       };
     }
     case 'convert_quotation_to_invoice': {

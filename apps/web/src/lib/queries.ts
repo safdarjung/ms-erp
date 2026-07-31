@@ -2,6 +2,7 @@ import 'server-only';
 import type { SQL } from 'drizzle-orm';
 import {
   withTenant, customer, lead, quotation, quotationItem, taxInvoice, taxInvoiceItem, tenant,
+  users, role, userRole,
   count, sql, desc, eq, or, ilike, and,
 } from '@ms/db';
 import { parseLetterhead, type Letterhead } from '@ms/core';
@@ -99,6 +100,21 @@ export async function getQuotation(id: string) {
     const [cust] = await tx.select().from(customer).where(eq(customer.id, q.customerId)).limit(1);
     const [t] = await tx.select({ settings: tenant.settings }).from(tenant).limit(1);
     return { quotation: q, items, customer: cust ?? null, letterhead: parseLetterhead(t?.settings) };
+  });
+}
+
+export async function listUsersWithRoles() {
+  const u = await requireUser();
+  return withTenant(u.tenantId, u.userId, async (tx) => {
+    const list = await tx.select({
+      id: users.id, name: users.name, email: users.email,
+      status: users.status, lastLoginAt: users.lastLoginAt, createdAt: users.createdAt,
+    }).from(users).orderBy(users.createdAt);
+    const roles = await tx.select({ userId: userRole.userId, name: role.name })
+      .from(userRole).innerJoin(role, eq(userRole.roleId, role.id));
+    const byUser = new Map<string, string[]>();
+    for (const r of roles) byUser.set(r.userId, [...(byUser.get(r.userId) ?? []), r.name]);
+    return list.map((row) => ({ ...row, roles: byUser.get(row.id) ?? [] }));
   });
 }
 

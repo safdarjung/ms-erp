@@ -33,7 +33,7 @@ export default async function CustomersPage({
       <FilterBar basePath="/customers" q={q} placeholder="Search name, GSTIN, phone…" />
 
       <div className="card overflow-x-auto">
-        <table className="w-full text-sm">
+        <table className="w-full text-sm min-w-[640px]">
           <thead>
             <tr className="text-left text-faint border-b border-line text-xs uppercase tracking-wide [&>th]:px-4 [&>th]:py-2.5 [&>th]:font-medium">
               <th>Name</th><th>GSTIN</th><th>State</th><th>Contact</th><th>Phone</th>

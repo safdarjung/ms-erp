@@ -79,6 +79,13 @@
   }
 }
 
+/* Phones: 16px inputs stop iOS Safari from zooming the page on focus. */
+@media (max-width: 640px) {
+  .field, select.field, textarea.field {
+    font-size: 16px;
+  }
+}
+
 @layer utilities {
   .scroll-thin {
     scrollbar-width: thin;

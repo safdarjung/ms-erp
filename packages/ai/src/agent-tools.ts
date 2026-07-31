@@ -158,6 +158,23 @@ export const ACTION_TOOLS: ActionToolDef[] = [
     required: ['customerId', 'items'],
   },
   {
+    name: 'update_quotation',
+    description:
+      'Edit an existing quotation (same number): change items, terms, notes, date or validity. ' +
+      'The items array REPLACES all existing lines — query quotation_item first and resend unchanged lines too. ' +
+      'Totals & GST recompute automatically. Converted quotations are locked.',
+    permission: 'quotation.edit',
+    properties: {
+      id: uuid('quotation'),
+      docDate: { type: 'string', description: 'New document date YYYY-MM-DD (omit to keep)' },
+      validityDays: { type: 'integer' },
+      terms: { type: 'string', description: 'Full replacement terms, one per line (omit to keep)' },
+      notes: { type: 'string' },
+      items: itemsProp(true),
+    },
+    required: ['id'],
+  },
+  {
     name: 'set_quotation_status',
     description: 'Move a quotation between draft / sent / approved / rejected. Converted quotations are locked.',
     permission: 'quotation.edit',
@@ -189,6 +206,23 @@ export const ACTION_TOOLS: ActionToolDef[] = [
     required: ['customerId', 'items'],
   },
   {
+    name: 'update_invoice',
+    description:
+      'Edit an existing tax invoice / bill (same number): change items, terms, notes, date or PO ref. ' +
+      'The items array REPLACES all existing lines — query tax_invoice_item first and resend unchanged lines too. ' +
+      'Tax figures recompute automatically. Cancelled invoices are locked.',
+    permission: 'invoice.edit',
+    properties: {
+      id: uuid('invoice'),
+      docDate: { type: 'string', description: 'New document date YYYY-MM-DD (omit to keep)' },
+      poRef: { type: 'string' },
+      terms: { type: 'string', description: 'Full replacement terms, one per line (omit to keep)' },
+      notes: { type: 'string' },
+      items: itemsProp(false),
+    },
+    required: ['id'],
+  },
+  {
     name: 'set_invoice_status',
     description: 'Mark an invoice paid, cancel it, or set it back to issued.',
     permission: 'invoice.edit',
@@ -216,6 +250,8 @@ export const PAGE_TARGETS = {
   invoice: { path: '/invoices/:id', label: 'Invoice', needsId: true },
   print_quotation: { path: '/print/quotation/:id', label: 'Quotation PDF', needsId: true, newTab: true },
   print_invoice: { path: '/print/invoice/:id', label: 'Invoice PDF', needsId: true, newTab: true },
+  users: { path: '/settings/users', label: 'Users & roles' },
+  change_password: { path: '/settings/password', label: 'Change password' },
 } as const;
 
 export type PageKey = keyof typeof PAGE_TARGETS;
