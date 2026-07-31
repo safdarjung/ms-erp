@@ -1,15 +1,38 @@
 import 'server-only';
-import { withTenant, customer, lead, quotation, quotationItem, taxInvoice, taxInvoiceItem, tenant, count, sql, desc, eq } from '@ms/db';
+import type { SQL } from 'drizzle-orm';
+import {
+  withTenant, customer, lead, quotation, quotationItem, taxInvoice, taxInvoiceItem, tenant,
+  count, sql, desc, eq, or, ilike, and,
+} from '@ms/db';
+import { parseLetterhead, type Letterhead } from '@ms/core';
 import { requireUser } from './rbac';
 
-export async function listCustomers() {
+const like = (q: string) => `%${q.trim()}%`;
+
+export async function listCustomers(q?: string) {
   const u = await requireUser();
-  return withTenant(u.tenantId, u.userId, (tx) => tx.select().from(customer).orderBy(desc(customer.createdAt)));
+  return withTenant(u.tenantId, u.userId, (tx) =>
+    tx.select().from(customer)
+      .where(q?.trim()
+        ? or(ilike(customer.name, like(q)), ilike(customer.gstin, like(q)),
+            ilike(customer.phone, like(q)), ilike(customer.contactPerson, like(q)))
+        : undefined)
+      .orderBy(desc(customer.createdAt)),
+  );
 }
 
-export async function listLeads() {
+export async function listLeads(q?: string, stage?: string) {
   const u = await requireUser();
-  return withTenant(u.tenantId, u.userId, (tx) => tx.select().from(lead).orderBy(desc(lead.createdAt)));
+  const filters: SQL[] = [];
+  if (q?.trim()) {
+    filters.push(or(ilike(lead.customerName, like(q)), ilike(lead.requirement, like(q)), ilike(lead.source, like(q)))!);
+  }
+  if (stage?.trim()) filters.push(eq(lead.stage, stage));
+  return withTenant(u.tenantId, u.userId, (tx) =>
+    tx.select().from(lead)
+      .where(filters.length ? and(...filters) : undefined)
+      .orderBy(desc(lead.createdAt)),
+  );
 }
 
 export async function customersForSelect() {
@@ -20,13 +43,15 @@ export async function customersForSelect() {
   );
 }
 
-export async function listInvoices() {
+export async function listInvoices(q?: string) {
   const u = await requireUser();
   return withTenant(u.tenantId, u.userId, (tx) =>
     tx.select({
       id: taxInvoice.id, number: taxInvoice.number, docDate: taxInvoice.docDate, status: taxInvoice.status,
       grandTotal: taxInvoice.grandTotal, isInterstate: taxInvoice.isInterstate, customerName: customer.name,
-    }).from(taxInvoice).leftJoin(customer, eq(taxInvoice.customerId, customer.id)).orderBy(desc(taxInvoice.createdAt)),
+    }).from(taxInvoice).leftJoin(customer, eq(taxInvoice.customerId, customer.id))
+      .where(q?.trim() ? or(ilike(taxInvoice.number, like(q)), ilike(customer.name, like(q))) : undefined)
+      .orderBy(desc(taxInvoice.createdAt)),
   );
 }
 
@@ -38,29 +63,30 @@ export async function getInvoice(id: string) {
     const items = await tx.select().from(taxInvoiceItem).where(eq(taxInvoiceItem.invoiceId, id)).orderBy(taxInvoiceItem.seq);
     const [cust] = await tx.select().from(customer).where(eq(customer.id, invoice.customerId)).limit(1);
     const [t] = await tx.select({ settings: tenant.settings }).from(tenant).limit(1);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const letterhead = (t?.settings as any)?.letterhead ?? null;
-    return { invoice, items, customer: cust ?? null, letterhead };
+    return { invoice, items, customer: cust ?? null, letterhead: parseLetterhead(t?.settings) };
   });
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export async function getLetterhead(): Promise<any> {
+export async function getLetterhead(): Promise<Letterhead | null> {
   const u = await requireUser();
   return withTenant(u.tenantId, u.userId, async (tx) => {
     const [t] = await tx.select({ settings: tenant.settings }).from(tenant).limit(1);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return (t?.settings as any)?.letterhead ?? null;
+    return parseLetterhead(t?.settings);
   });
 }
 
-export async function listQuotations() {
+export async function listQuotations(q?: string, status?: string) {
   const u = await requireUser();
+  const filters: SQL[] = [];
+  if (q?.trim()) filters.push(or(ilike(quotation.number, like(q)), ilike(customer.name, like(q)))!);
+  if (status?.trim()) filters.push(eq(quotation.status, status));
   return withTenant(u.tenantId, u.userId, (tx) =>
     tx.select({
       id: quotation.id, number: quotation.number, docDate: quotation.docDate, status: quotation.status,
       grandTotal: quotation.grandTotal, customerName: customer.name, convertedInvoiceId: quotation.convertedInvoiceId,
-    }).from(quotation).leftJoin(customer, eq(quotation.customerId, customer.id)).orderBy(desc(quotation.createdAt)),
+    }).from(quotation).leftJoin(customer, eq(quotation.customerId, customer.id))
+      .where(filters.length ? and(...filters) : undefined)
+      .orderBy(desc(quotation.createdAt)),
   );
 }
 
@@ -72,25 +98,59 @@ export async function getQuotation(id: string) {
     const items = await tx.select().from(quotationItem).where(eq(quotationItem.quotationId, id)).orderBy(quotationItem.seq);
     const [cust] = await tx.select().from(customer).where(eq(customer.id, q.customerId)).limit(1);
     const [t] = await tx.select({ settings: tenant.settings }).from(tenant).limit(1);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const letterhead = (t?.settings as any)?.letterhead ?? null;
-    return { quotation: q, items, customer: cust ?? null, letterhead };
+    return { quotation: q, items, customer: cust ?? null, letterhead: parseLetterhead(t?.settings) };
   });
 }
 
-export async function dashboardCounts() {
+export type DashboardData = Awaited<ReturnType<typeof dashboardData>>;
+
+/** Everything the dashboard needs, in one tenant transaction. */
+export async function dashboardData() {
   const u = await requireUser();
+  const now = new Date();
+  // ISO strings, not Date objects — raw sql`` params bypass drizzle's column
+  // serialization and the postgres.js driver rejects Dates there.
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+  const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString();
+
   return withTenant(u.tenantId, u.userId, async (tx) => {
-    const [c] = await tx.select({ n: count() }).from(customer);
-    const [l] = await tx.select({ n: count() }).from(lead);
-    const [won] = await tx.select({ n: count() }).from(lead).where(eq(lead.stage, 'won'));
-    const [neg] = await tx.select({ n: count() }).from(lead).where(eq(lead.stage, 'negotiation'));
-    const [inv] = await tx.select({
+    const [customers] = await tx.select({ n: count() }).from(customer);
+    const [leadsOpen] = await tx.select({ n: count() }).from(lead)
+      .where(sql`${lead.stage} not in ('won','lost')`);
+    const [invoices] = await tx.select({
       n: count(), revenue: sql<string>`coalesce(sum(${taxInvoice.grandTotal}), 0)`,
     }).from(taxInvoice);
+    const [thisMonth] = await tx.select({ v: sql<string>`coalesce(sum(${taxInvoice.grandTotal}), 0)` })
+      .from(taxInvoice).where(sql`${taxInvoice.docDate} >= ${monthStart}`);
+    const [lastMonth] = await tx.select({ v: sql<string>`coalesce(sum(${taxInvoice.grandTotal}), 0)` })
+      .from(taxInvoice).where(sql`${taxInvoice.docDate} >= ${lastMonthStart} and ${taxInvoice.docDate} < ${monthStart}`);
+    const pipeline = await tx.select({
+      stage: lead.stage, n: count(), value: sql<string>`coalesce(sum(${lead.valueEstimate}), 0)`,
+    }).from(lead).groupBy(lead.stage);
+    const [quotesOpen] = await tx.select({ n: count(), value: sql<string>`coalesce(sum(${quotation.grandTotal}), 0)` })
+      .from(quotation).where(sql`${quotation.status} in ('draft','sent')`);
+    const recentQuotations = await tx.select({
+      id: quotation.id, number: quotation.number, docDate: quotation.docDate,
+      status: quotation.status, grandTotal: quotation.grandTotal, customerName: customer.name,
+    }).from(quotation).leftJoin(customer, eq(quotation.customerId, customer.id))
+      .orderBy(desc(quotation.createdAt)).limit(5);
+    const recentInvoices = await tx.select({
+      id: taxInvoice.id, number: taxInvoice.number, docDate: taxInvoice.docDate,
+      status: taxInvoice.status, grandTotal: taxInvoice.grandTotal, customerName: customer.name,
+    }).from(taxInvoice).leftJoin(customer, eq(taxInvoice.customerId, customer.id))
+      .orderBy(desc(taxInvoice.createdAt)).limit(5);
+
     return {
-      customers: Number(c?.n ?? 0), leads: Number(l?.n ?? 0), won: Number(won?.n ?? 0),
-      negotiation: Number(neg?.n ?? 0), invoices: Number(inv?.n ?? 0), revenue: Number(inv?.revenue ?? 0),
+      customers: Number(customers?.n ?? 0),
+      leadsOpen: Number(leadsOpen?.n ?? 0),
+      invoices: Number(invoices?.n ?? 0),
+      revenue: Number(invoices?.revenue ?? 0),
+      invoicedThisMonth: Number(thisMonth?.v ?? 0),
+      invoicedLastMonth: Number(lastMonth?.v ?? 0),
+      pipeline: pipeline.map((p) => ({ stage: p.stage, n: Number(p.n), value: Number(p.value) })),
+      quotesOpen: { n: Number(quotesOpen?.n ?? 0), value: Number(quotesOpen?.value ?? 0) },
+      recentQuotations,
+      recentInvoices,
     };
   });
 }

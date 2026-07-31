@@ -5,6 +5,9 @@ import { getQuotation } from '@/lib/queries';
 import { requireUser, can } from '@/lib/rbac';
 import { formatDate } from '@/lib/format';
 import { convertToInvoiceAction } from '../actions';
+import { QuotationStatusSelect } from '../status-select';
+
+export const metadata = { title: 'Quotation' };
 
 export default async function QuotationDetail({ params }: { params: Promise<{ id: string }> }) {
   const user = await requireUser();
@@ -20,9 +23,12 @@ export default async function QuotationDetail({ params }: { params: Promise<{ id
       <div className="flex items-center justify-between mb-6 gap-4 flex-wrap">
         <div className="flex items-center gap-3">
           <h1 className="text-2xl font-semibold tracking-tight font-mono">{q.number}</h1>
-          <span className={`pill capitalize ${converted ? 'bg-[#e4f1ea] text-ok' : 'bg-surface-2 text-muted'}`}>{q.status}</span>
+          {converted || !can(user, 'quotation.edit')
+            ? <span className={`pill capitalize ${converted ? 'bg-[#e4f1ea] text-ok' : 'bg-surface-2 text-muted'}`}>{q.status}</span>
+            : <QuotationStatusSelect id={q.id} status={q.status} />}
         </div>
         <div className="flex gap-2">
+          <a href={`/print/quotation/${q.id}`} target="_blank" rel="noreferrer" className="btn-ghost">Preview</a>
           <a href={`/print/quotation/${q.id}?print=1`} target="_blank" rel="noreferrer" className="btn-ghost">Print / PDF</a>
           {converted ? (
             <Link href={`/invoices/${q.convertedInvoiceId}`} className="btn-primary">View invoice →</Link>
@@ -76,7 +82,19 @@ export default async function QuotationDetail({ params }: { params: Promise<{ id
         </table>
       </div>
 
-      <div className="flex justify-end">
+      <div className="flex flex-col md:flex-row gap-4 md:items-start">
+        {q.terms ? (
+          <div className="card p-4 text-sm flex-1">
+            <div className="text-faint text-xs uppercase mb-1.5">Terms</div>
+            <div className="whitespace-pre-wrap text-muted text-xs leading-relaxed">{q.terms}</div>
+            {q.notes && (
+              <>
+                <div className="text-faint text-xs uppercase mt-3 mb-1.5">Notes</div>
+                <div className="whitespace-pre-wrap text-muted text-xs leading-relaxed">{q.notes}</div>
+              </>
+            )}
+          </div>
+        ) : <div className="flex-1" />}
         <div className="card p-4 w-full md:w-80 text-sm">
           <div className="flex justify-between py-1"><span className="text-muted">Taxable</span><span className="tabular-nums font-mono">{formatINR(q.subtotal)}</span></div>
           {q.isInterstate ? (

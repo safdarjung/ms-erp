@@ -2,11 +2,12 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { formatINR, amountInWords } from '@ms/core';
 import { getInvoice } from '@/lib/queries';
-import { requireUser } from '@/lib/rbac';
+import { requireUser, can } from '@/lib/rbac';
 import { formatDate } from '@/lib/format';
+import { InvoiceStatusSelect } from '../status-select';
 
 export default async function InvoiceDetail({ params }: { params: Promise<{ id: string }> }) {
-  await requireUser();
+  const user = await requireUser();
   const { id } = await params;
   const data = await getInvoice(id);
   if (!data?.invoice) notFound();
@@ -16,7 +17,12 @@ export default async function InvoiceDetail({ params }: { params: Promise<{ id: 
     <div className="max-w-4xl">
       <p className="eyebrow">Finance</p>
       <div className="flex items-center justify-between mb-6 gap-4 flex-wrap">
-        <h1 className="text-2xl font-semibold tracking-tight font-mono">{inv.number}</h1>
+        <div className="flex items-center gap-3">
+          <h1 className="text-2xl font-semibold tracking-tight font-mono">{inv.number}</h1>
+          {can(user, 'invoice.edit')
+            ? <InvoiceStatusSelect id={inv.id} status={inv.status} />
+            : <span className={`pill capitalize ${inv.status === 'paid' ? 'bg-[#e4f1ea] text-ok' : inv.status === 'cancelled' ? 'bg-[#f6e5e1] text-crit' : 'bg-surface-2 text-muted'}`}>{inv.status}</span>}
+        </div>
         <div className="flex gap-2">
           <a href={`/print/invoice/${inv.id}`} target="_blank" rel="noreferrer" className="btn-ghost">Preview</a>
           <a href={`/print/invoice/${inv.id}?print=1`} target="_blank" rel="noreferrer" className="btn-primary">Print / Save PDF</a>

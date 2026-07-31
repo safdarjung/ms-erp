@@ -45,3 +45,23 @@ export async function withTenant<T>(
     return fn(tx);
   });
 }
+
+/**
+ * Same as `withTenant`, but the transaction is opened `READ ONLY` — Postgres
+ * rejects any write regardless of what SQL runs inside. Used for AI analytics
+ * queries as defense-in-depth on top of the SQL guard.
+ */
+export async function withTenantReadOnly<T>(
+  tenantId: string,
+  userId: string,
+  fn: (tx: Tx) => Promise<T>,
+): Promise<T> {
+  return appDb.transaction(
+    async (tx) => {
+      await tx.execute(sql`select set_config('app.current_tenant', ${tenantId}, true)`);
+      await tx.execute(sql`select set_config('app.current_user', ${userId}, true)`);
+      return fn(tx);
+    },
+    { accessMode: 'read only' },
+  );
+}

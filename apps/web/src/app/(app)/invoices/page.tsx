@@ -3,18 +3,28 @@ import { formatINR } from '@ms/core';
 import { requireUser, can } from '@/lib/rbac';
 import { listInvoices } from '@/lib/queries';
 import { formatDate } from '@/lib/format';
+import { FilterBar } from '@/components/filter-bar';
 
-export default async function InvoicesPage() {
+export const metadata = { title: 'Invoices' };
+
+export default async function InvoicesPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ q?: string }>;
+}) {
+  const { q } = await searchParams;
   const user = await requireUser();
-  const rows = await listInvoices();
+  const rows = await listInvoices(q);
 
   return (
     <div className="max-w-5xl">
       <p className="eyebrow">Finance</p>
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-5">
         <h1 className="text-2xl font-semibold tracking-tight">GST Invoices</h1>
         {can(user, 'invoice.create') && <Link href="/invoices/new" className="btn-primary">+ New invoice</Link>}
       </div>
+
+      <FilterBar basePath="/invoices" q={q} placeholder="Search number or customer…" />
 
       <div className="card overflow-x-auto">
         <table className="w-full text-sm">
@@ -26,7 +36,7 @@ export default async function InvoicesPage() {
           </thead>
           <tbody>
             {rows.map((r) => (
-              <tr key={r.id} className="border-b border-line last:border-0 [&>td]:px-4 [&>td]:py-2.5">
+              <tr key={r.id} className="border-b border-line last:border-0 hover:bg-surface-2/50 [&>td]:px-4 [&>td]:py-2.5">
                 <td className="font-mono text-xs"><Link href={`/invoices/${r.id}`} className="text-steel hover:underline">{r.number}</Link></td>
                 <td>{formatDate(r.docDate)}</td>
                 <td className="text-ink">{r.customerName ?? '—'}</td>
@@ -37,7 +47,10 @@ export default async function InvoicesPage() {
               </tr>
             ))}
             {rows.length === 0 && (
-              <tr><td colSpan={7} className="px-4 py-8 text-center text-muted">No invoices yet. <Link href="/invoices/new" className="text-steel hover:underline">Create one →</Link></td></tr>
+              <tr><td colSpan={7} className="px-4 py-10 text-center text-muted">
+                {q ? <>No invoices match this search. <Link href="/invoices" className="text-steel hover:underline">Clear →</Link></>
+                  : <>No invoices yet. <Link href="/invoices/new" className="text-steel hover:underline">Create one →</Link></>}
+              </td></tr>
             )}
           </tbody>
         </table>

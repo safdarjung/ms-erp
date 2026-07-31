@@ -11,7 +11,7 @@ export function LeadForm() {
   }, [state]);
 
   return (
-    <form ref={ref} action={action} className="card p-4 grid grid-cols-2 md:grid-cols-4 gap-3 items-end mb-6">
+    <form ref={ref} action={action} className="grid grid-cols-2 md:grid-cols-4 gap-3 items-end">
       <div className="col-span-2 md:col-span-1">
         <label className="label">Customer / enquiry *</label>
         <input name="customerName" required className="field" placeholder="e.g. Verma Dies" />

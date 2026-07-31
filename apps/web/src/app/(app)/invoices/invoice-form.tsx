@@ -2,6 +2,7 @@
 import { useActionState, useMemo, useState } from 'react';
 import { computeGst, isInterstate, formatINR } from '@ms/core';
 import { SubmitButton } from '@/components/submit-button';
+import { AiPolishButton } from '@/components/ai-polish-button';
 import { createInvoiceAction, type ActionState } from './actions';
 
 type Cust = { id: string; name: string; stateCode: string | null; gstin: string | null };
@@ -13,14 +14,17 @@ export function InvoiceForm({
   customers,
   supplierStateCode,
   defaultTerms,
+  aiEnabled,
 }: {
   customers: Cust[];
   supplierStateCode: string;
   defaultTerms: string;
+  aiEnabled: boolean;
 }) {
   const [state, action] = useActionState<ActionState, FormData>(createInvoiceAction, {});
   const [customerId, setCustomerId] = useState('');
   const [rows, setRows] = useState<Row[]>([emptyRow()]);
+  const [terms, setTerms] = useState(defaultTerms);
   const today = new Date().toISOString().slice(0, 10);
 
   const cust = customers.find((c) => c.id === customerId);
@@ -91,7 +95,15 @@ export function InvoiceForm({
       <div className="flex flex-col md:flex-row gap-5">
         <div className="flex-1">
           <label className="label">Terms</label>
-          <textarea name="terms" rows={6} defaultValue={defaultTerms} className="field" />
+          <textarea name="terms" rows={6} value={terms} onChange={(e) => setTerms(e.target.value)} className="field" />
+          <AiPolishButton
+            kind="terms"
+            docType="invoice"
+            value={terms}
+            onApply={setTerms}
+            enabled={aiEnabled}
+            context={cust ? `Customer: ${cust.name}.` : undefined}
+          />
         </div>
         <div className="card p-4 w-full md:w-72 text-sm self-start">
           <div className="flex justify-between py-1"><span className="text-muted">Taxable</span><span className="tabular-nums font-mono">{formatINR(totals.subtotal)}</span></div>

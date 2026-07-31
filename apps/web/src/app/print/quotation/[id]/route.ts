@@ -1,6 +1,7 @@
 import type { NextRequest } from 'next/server';
+import { amountInWords, stateLabel } from '@ms/core';
 import { getQuotation } from '@/lib/queries';
-import { renderInvoiceHTML, type InvoiceData } from '@/pdf/invoice-template';
+import { buildTaxLines, renderDocumentHTML, type DocumentData } from '@/pdf/document-template';
 import { formatDate } from '@/lib/format';
 
 export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
@@ -9,30 +10,54 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   if (!data?.quotation) return new Response('Quotation not found', { status: 404 });
 
   const { quotation: q, items, customer: cust, letterhead: lh } = data;
-  const rates = [...new Set(items.map((i) => Number(i.gstRate)))];
-  const one = rates.length === 1 ? rates[0]! : null;
-  const taxLines = q.isInterstate
-    ? [{ label: `IGST${one !== null ? ` ${one}%` : ''}`, amount: Number(q.igst) }]
-    : [
-        { label: `CGST${one !== null ? ` ${one / 2}%` : ''}`, amount: Number(q.cgst) },
-        { label: `SGST${one !== null ? ` ${one / 2}%` : ''}`, amount: Number(q.sgst) },
-      ];
 
-  const docData: InvoiceData = {
-    company: {
-      name: lh?.name ?? 'M.S. ENTERPRISES', factory: lh?.factory ?? '', office: lh?.office ?? '',
-      gstin: lh?.gstin ?? '', bank: lh?.bank ?? { name: '', acNo: '', ifsc: '' },
-    },
-    buyer: { name: cust?.name ?? '—', addressLines: cust?.address ? [cust.address] : [], gstin: cust?.gstin ?? undefined },
-    billNo: q.number,
-    date: formatDate(q.docDate),
+  const validTill = new Date(q.docDate.getTime() + q.validityDays * 86_400_000);
+  const meta: DocumentData['meta'] = [
+    { label: 'Date', value: formatDate(q.docDate) },
+    { label: 'Valid Until', value: `${formatDate(validTill)} (${q.validityDays} days)` },
+  ];
+  if (q.placeOfSupply) meta.push({ label: 'Place of Supply', value: stateLabel(q.placeOfSupply) });
+  meta.push({ label: 'Tax Type', value: q.isInterstate ? 'IGST (inter-state)' : 'CGST + SGST' });
+
+  const doc: DocumentData = {
     docLabel: 'QUOTATION',
-    items: items.map((i) => ({ description: i.description, hsn: i.hsn ?? '', qty: Number(i.qty), rate: Number(i.rate) })),
-    taxLines,
-    terms: q.terms ? q.terms.split('\n').filter((l) => l.trim()) : (lh?.defaultTerms ?? []),
+    company: {
+      name: lh?.name ?? 'M.S. ENTERPRISES',
+      factory: lh?.factory ?? '',
+      office: lh?.office ?? '',
+      gstin: lh?.gstin ?? '',
+      bank: lh?.bank ?? { name: '', acNo: '', ifsc: '' },
+    },
+    buyer: {
+      name: cust?.name ?? '—',
+      addressLines: cust?.address ? [cust.address] : [],
+      gstin: cust?.gstin ?? undefined,
+      stateLabel: stateLabel(cust?.stateCode) || undefined,
+    },
+    number: q.number,
+    meta,
+    items: items.map((i) => ({
+      description: i.description,
+      hsn: i.hsn ?? '',
+      qty: Number(i.qty),
+      uom: i.uom,
+      rate: Number(i.rate),
+      amount: Number(i.taxableValue),
+      isTooling: i.isToolingCharge,
+    })),
+    totals: {
+      subtotal: Number(q.subtotal),
+      taxLines: buildTaxLines(q.isInterstate, items.map((i) => Number(i.gstRate)), {
+        cgst: Number(q.cgst), sgst: Number(q.sgst), igst: Number(q.igst),
+      }),
+      grand: Number(q.grandTotal),
+      words: amountInWords(Number(q.grandTotal)),
+    },
+    terms: q.terms ? q.terms.split(/\r?\n|\\n/).filter((l) => l.trim()) : (lh?.defaultTerms ?? []),
+    notes: q.notes ?? undefined,
   };
 
-  let html = renderInvoiceHTML(docData);
+  let html = renderDocumentHTML(doc);
   if (req.nextUrl.searchParams.get('print') === '1') {
     html = html.replace('</body>', '<script>window.addEventListener("load",function(){setTimeout(function(){window.print();},250);});</script></body>');
   }

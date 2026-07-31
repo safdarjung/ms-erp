@@ -14,7 +14,7 @@
     "typecheck": "turbo run typecheck",
     "infra:up": "docker compose up -d",
     "infra:down": "docker compose down",
-    "db:setup": "pnpm --filter @ms/db setup",
+    "db:setup": "pnpm --filter @ms/db run setup",
     "db:generate": "pnpm --filter @ms/db generate",
     "db:migrate": "pnpm --filter @ms/db migrate",
     "db:seed": "pnpm --filter @ms/db seed",

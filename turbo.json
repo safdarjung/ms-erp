@@ -1,5 +1,6 @@
 {
   "$schema": "https://turbo.build/schema.json",
+  "globalEnv": ["DATABASE_URL", "DATABASE_URL_ADMIN", "SESSION_SECRET", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "AI_PROVIDER", "PG_POOL_MAX", "VERCEL"],
   "tasks": {
     "dev": { "cache": false, "persistent": true },
     "build": {

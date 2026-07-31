@@ -22,6 +22,7 @@ export async function createCustomerAction(_prev: ActionState, formData: FormDat
       contactPerson: d.contactPerson,
       phone: d.phone,
       email: d.email,
+      address: d.address,
       creditTermsDays: d.creditTermsDays,
     }),
   );

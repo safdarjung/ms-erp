@@ -266,6 +266,40 @@ export const taxInvoice = pgTable('tax_invoice', {
   ...ts(),
 }, (t) => ({ tenantIdx: index('tax_invoice_tenant_idx').on(t.tenantId) }));
 
+// ── AI gateway metering (docs/05 §1) ────────────────────────────────────────
+
+export const aiUsage = pgTable('ai_usage', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id').notNull(),
+  userId: uuid('user_id'),
+  feature: varchar('feature', { length: 30 }).notNull(),
+  model: varchar('model', { length: 60 }).notNull(),
+  inputTokens: integer('input_tokens').notNull().default(0),
+  outputTokens: integer('output_tokens').notNull().default(0),
+  cacheReadTokens: integer('cache_read_tokens').notNull().default(0),
+  cacheWriteTokens: integer('cache_write_tokens').notNull().default(0),
+  costUsd: numeric('cost_usd', { precision: 10, scale: 6 }).notNull().default('0'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({ tenantIdx: index('ai_usage_tenant_idx').on(t.tenantId, t.createdAt) }));
+
+// Staged assistant actions (docs/05 §5 human-in-the-loop): every write the AI
+// proposes is stored here first and only executed after the user confirms in
+// the UI — doubling as the audit trail of what the agent did.
+export const aiAction = pgTable('ai_action', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id').notNull(),
+  userId: uuid('user_id').notNull(),
+  kind: varchar('kind', { length: 40 }).notNull(),
+  payload: jsonb('payload').notNull(),
+  summary: text('summary').notNull(),
+  status: varchar('status', { length: 12 }).notNull().default('pending'),
+  result: jsonb('result'),
+  error: text('error'),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  decidedAt: timestamp('decided_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({ tenantIdx: index('ai_action_tenant_idx').on(t.tenantId, t.createdAt) }));
+
 export const taxInvoiceItem = pgTable('tax_invoice_item', {
   id: uuid('id').primaryKey().defaultRandom(),
   tenantId: uuid('tenant_id').notNull(),

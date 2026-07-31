@@ -1,10 +1,12 @@
 import type { NextRequest } from 'next/server';
+import { amountInWords, stateLabel } from '@ms/core';
 import { getInvoice } from '@/lib/queries';
-import { renderInvoiceHTML, type InvoiceData } from '@/pdf/invoice-template';
+import { buildTaxLines, renderDocumentHTML, type DocumentData } from '@/pdf/document-template';
 import { formatDate } from '@/lib/format';
 
 // Renders the invoice on the M.S. Enterprises letterhead as a full HTML page.
 // ?print=1 auto-opens the browser print dialog (Save as PDF).
+
 export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
   const data = await getInvoice(id);
@@ -12,16 +14,13 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
 
   const { invoice: inv, items, customer: cust, letterhead: lh } = data;
 
-  const rates = [...new Set(items.map((i) => Number(i.gstRate)))];
-  const one = rates.length === 1 ? rates[0]! : null;
-  const taxLines = inv.isInterstate
-    ? [{ label: `IGST${one !== null ? ` ${one}%` : ''}`, amount: Number(inv.igst) }]
-    : [
-        { label: `CGST${one !== null ? ` ${one / 2}%` : ''}`, amount: Number(inv.cgst) },
-        { label: `SGST${one !== null ? ` ${one / 2}%` : ''}`, amount: Number(inv.sgst) },
-      ];
+  const meta: DocumentData['meta'] = [{ label: 'Date', value: formatDate(inv.docDate) }];
+  if (inv.poRef) meta.push({ label: 'PO Ref.', value: inv.poRef });
+  if (inv.placeOfSupply) meta.push({ label: 'Place of Supply', value: stateLabel(inv.placeOfSupply) });
+  meta.push({ label: 'Tax Type', value: inv.isInterstate ? 'IGST (inter-state)' : 'CGST + SGST' });
 
-  const invoiceData: InvoiceData = {
+  const doc: DocumentData = {
+    docLabel: inv.type === 'proforma' ? 'PROFORMA INVOICE' : 'TAX INVOICE',
     company: {
       name: lh?.name ?? 'M.S. ENTERPRISES',
       factory: lh?.factory ?? '',
@@ -33,15 +32,32 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       name: cust?.name ?? '—',
       addressLines: cust?.address ? [cust.address] : [],
       gstin: cust?.gstin ?? undefined,
+      stateLabel: stateLabel(cust?.stateCode) || undefined,
     },
-    billNo: inv.number,
-    date: formatDate(inv.docDate),
-    items: items.map((i) => ({ description: i.description, hsn: i.hsn ?? '', qty: Number(i.qty), rate: Number(i.rate) })),
-    taxLines,
-    terms: inv.terms ? inv.terms.split('\n').filter((l) => l.trim()) : (lh?.defaultTerms ?? []),
+    number: inv.number,
+    meta,
+    items: items.map((i) => ({
+      description: i.description,
+      hsn: i.hsn ?? '',
+      qty: Number(i.qty),
+      uom: i.uom,
+      rate: Number(i.rate),
+      amount: Number(i.taxableValue),
+    })),
+    totals: {
+      subtotal: Number(inv.subtotal),
+      taxLines: buildTaxLines(inv.isInterstate, items.map((i) => Number(i.gstRate)), {
+        cgst: Number(inv.cgst), sgst: Number(inv.sgst), igst: Number(inv.igst),
+      }),
+      roundOff: Number(inv.roundOff) || undefined,
+      grand: Number(inv.grandTotal),
+      words: amountInWords(Number(inv.grandTotal)),
+    },
+    terms: inv.terms ? inv.terms.split(/\r?\n|\\n/).filter((l) => l.trim()) : (lh?.defaultTerms ?? []),
+    notes: inv.notes ?? undefined,
   };
 
-  let html = renderInvoiceHTML(invoiceData);
+  let html = renderDocumentHTML(doc);
   if (req.nextUrl.searchParams.get('print') === '1') {
     html = html.replace('</body>', '<script>window.addEventListener("load",function(){setTimeout(function(){window.print();},250);});</script></body>');
   }
