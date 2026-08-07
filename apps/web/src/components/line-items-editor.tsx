@@ -5,7 +5,9 @@ import { formatINR } from '@ms/core';
 export type LineRow = {
   description: string; hsn: string; qty: string; uom: string; rate: string; gstRate: string; tooling?: boolean;
 };
-export const emptyRow = (): LineRow => ({ description: '', hsn: '', qty: '1', uom: 'NOS', rate: '', gstRate: '18', tooling: false });
+/** HSN for rubber/plastic moulding dies — this shop's standard line. */
+export const DEFAULT_HSN = '84807100';
+export const emptyRow = (): LineRow => ({ description: '', hsn: DEFAULT_HSN, qty: '1', uom: 'NOS', rate: '', gstRate: '18', tooling: false });
 
 const lineAmount = (r: LineRow) => (Number(r.qty) || 0) * (Number(r.rate) || 0);
 

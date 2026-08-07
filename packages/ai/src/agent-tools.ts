@@ -59,7 +59,7 @@ const LEAD_FIELDS: Record<string, JsonSchemaProp> = {
 
 const ITEM_FIELDS: Record<string, JsonSchemaProp> = {
   description: { type: 'string', description: 'Line description as it should appear on the document' },
-  hsn: { type: 'string', description: 'HSN/SAC code; omit if unknown' },
+  hsn: { type: 'string', description: 'HSN/SAC code — default 84807100 (rubber/plastic moulding dies) unless the item is clearly something else' },
   qty: { type: 'number' },
   uom: { type: 'string', description: 'NOS, SET, KG, HRS…' },
   rate: { type: 'number', description: 'Unit rate in INR, ex-GST' },

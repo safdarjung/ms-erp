@@ -131,8 +131,8 @@ export function renderDocumentHTML(d: DocumentData): string {
   .rule { border-top: 2.5px solid #111; margin: 7px 0 0; }
 
   .doctype {
-    text-align: center; font-weight: 700; font-size: 12.5px; letter-spacing: 4px;
-    text-transform: uppercase; margin: 9px 0 8px;
+    text-align: center; font-weight: 800; font-size: 20px; letter-spacing: 3px;
+    text-transform: uppercase; margin: 11px 0 9px; color: #000;
   }
 
   /* ── Buyer / meta grid ──────────────────────────────────────── */
