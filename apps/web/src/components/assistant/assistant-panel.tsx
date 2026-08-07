@@ -1,6 +1,7 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { MicButton } from './mic-button';
 
 // ── Types mirrored from the NDJSON protocol of /api/assistant ───────────────
 
@@ -348,6 +349,7 @@ export function AssistantPanel({ enabled }: { enabled: boolean }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [input, setInput] = useState('');
+  const dictationBase = useRef(''); // input text captured when voice dictation starts
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -673,6 +675,14 @@ export function AssistantPanel({ enabled }: { enabled: boolean }) {
               className="field flex-1"
               aria-label="Ask the assistant"
             />
+            {enabled && (
+              <MicButton
+                disabled={busy}
+                onStart={() => { dictationBase.current = input.trim(); }}
+                onInterim={(t) => setInput((dictationBase.current ? dictationBase.current + ' ' : '') + t)}
+                onText={(t) => { const n = (dictationBase.current ? dictationBase.current + ' ' : '') + t; setInput(n); dictationBase.current = n; }}
+              />
+            )}
             {busy ? (
               <button type="button" onClick={stop} className="btn-ghost shrink-0" aria-label="Stop">■ Stop</button>
             ) : (
