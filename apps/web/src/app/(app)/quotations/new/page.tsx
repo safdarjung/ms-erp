@@ -10,10 +10,15 @@ export const metadata = { title: 'New quotation' };
 // pricing model — keep Vercel from timing it out at the default.
 export const maxDuration = 60;
 
-export default async function NewQuotationPage() {
+export default async function NewQuotationPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ customer?: string }>;
+}) {
   const user = await requireUser();
   if (!can(user, 'quotation.create')) redirect('/quotations');
 
+  const { customer } = await searchParams;
   const [customers, lh] = await Promise.all([customersForSelect(), getLetterhead()]);
   const defaultTerms = lh?.defaultTerms?.join('\n') ?? '';
 
@@ -29,6 +34,7 @@ export default async function NewQuotationPage() {
         supplierStateCode={lh?.stateCode ?? '06'}
         defaultTerms={defaultTerms}
         aiEnabled={aiEnabled()}
+        defaultCustomerId={customer ?? ''}
       />
     </div>
   );

@@ -4,16 +4,9 @@ import { requireUser, can } from '@/lib/rbac';
 import { listQuotations } from '@/lib/queries';
 import { formatDate } from '@/lib/format';
 import { FilterBar } from '@/components/filter-bar';
+import { StatusPill } from '@/components/status-pill';
 
 export const metadata = { title: 'Quotations' };
-
-const STATUS_PILL: Record<string, string> = {
-  draft: 'bg-surface-2 text-muted',
-  sent: 'bg-[#e7eef5] text-steel',
-  approved: 'bg-[#e4f1ea] text-ok',
-  rejected: 'bg-[#f6e6e2] text-crit',
-  converted: 'bg-[#e4f1ea] text-ok',
-};
 
 export default async function QuotationsPage({
   searchParams,
@@ -45,22 +38,23 @@ export default async function QuotationsPage({
         <table className="w-full text-sm min-w-[640px]">
           <thead>
             <tr className="text-left text-faint border-b border-line text-xs uppercase tracking-wide [&>th]:px-4 [&>th]:py-2.5 [&>th]:font-medium">
-              <th>Number</th><th>Date</th><th>Customer</th><th className="text-right">Total</th><th>Status</th>
+              <th>Number</th><th>Date</th><th>Customer</th><th className="text-right">Total</th><th>Status</th><th></th>
             </tr>
           </thead>
           <tbody>
             {rows.map((r) => (
               <tr key={r.id} className="border-b border-line last:border-0 hover:bg-surface-2/50 [&>td]:px-4 [&>td]:py-2.5">
-                <td className="font-mono text-xs"><Link href={`/quotations/${r.id}`} className="text-steel hover:underline">{r.number}</Link></td>
-                <td>{formatDate(r.docDate)}</td>
+                <td className="font-mono text-xs whitespace-nowrap"><Link href={`/quotations/${r.id}`} className="text-steel hover:underline">{r.number}</Link></td>
+                <td className="whitespace-nowrap">{formatDate(r.docDate)}</td>
                 <td className="text-ink">{r.customerName ?? '—'}</td>
                 <td className="text-right tabular-nums font-mono">{formatINR(r.grandTotal)}</td>
-                <td><span className={`pill capitalize ${STATUS_PILL[r.status] ?? 'bg-surface-2 text-muted'}`}>{r.status}</span></td>
+                <td><StatusPill status={r.status} label={QUOTATION_STATUS_LABELS[r.status as QuotationStatus] ?? r.status} /></td>
+                <td className="text-right"><a href={`/print/quotation/${r.id}?print=1`} target="_blank" rel="noreferrer" className="text-steel text-xs hover:underline">PDF ↗</a></td>
               </tr>
             ))}
             {rows.length === 0 && (
               <tr>
-                <td colSpan={5} className="px-4 py-10 text-center text-muted">
+                <td colSpan={6} className="px-4 py-10 text-center text-muted">
                   {q || status ? <>Nothing matches this filter. <Link href="/quotations" className="text-steel hover:underline">Clear →</Link></>
                     : <>No quotations yet. <Link href="/quotations/new" className="text-steel hover:underline">Create one →</Link></>}
                 </td>

@@ -36,6 +36,13 @@
       "when": 1785432539120,
       "tag": "0004_premium_whistler",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1786116751640,
+      "tag": "0005_loving_puff_adder",
+      "breakpoints": true
     }
   ]
 }

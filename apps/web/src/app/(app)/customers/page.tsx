@@ -1,6 +1,9 @@
+import Link from 'next/link';
 import { listCustomers } from '@/lib/queries';
 import { requireUser, can } from '@/lib/rbac';
 import { FilterBar } from '@/components/filter-bar';
+import { ConfirmButton } from '@/components/confirm-button';
+import { StatusPill } from '@/components/status-pill';
 import { CustomerForm } from './customer-form';
 import { deleteCustomerAction } from './actions';
 
@@ -30,7 +33,7 @@ export default async function CustomersPage({
         </details>
       )}
 
-      <FilterBar basePath="/customers" q={q} placeholder="Search name, GSTIN, phone…" />
+      <FilterBar basePath="/customers" q={q} placeholder="Search name, GSTIN, phone, email…" />
 
       <div className="card overflow-x-auto">
         <table className="w-full text-sm min-w-[640px]">
@@ -44,7 +47,8 @@ export default async function CustomersPage({
             {rows.map((c) => (
               <tr key={c.id} className="border-b border-line last:border-0 hover:bg-surface-2/50 [&>td]:px-4 [&>td]:py-2.5">
                 <td className="font-medium text-ink">
-                  {c.name}
+                  <Link href={`/customers/${c.id}`} className="hover:text-accent hover:underline">{c.name}</Link>
+                  {c.status === 'archived' && <StatusPill status="archived" label="Archived" className="ml-2 !text-[0.6rem]" />}
                   {c.address && <div className="text-xs text-faint font-normal truncate max-w-[16rem]">{c.address}</div>}
                 </td>
                 <td className="font-mono text-xs">{c.gstin ?? '—'}</td>
@@ -54,10 +58,17 @@ export default async function CustomersPage({
                 <td className="text-right tabular-nums">{c.creditTermsDays} d</td>
                 {canDelete && (
                   <td className="text-right">
-                    <form action={deleteCustomerAction}>
-                      <input type="hidden" name="id" value={c.id} />
-                      <button className="text-crit hover:underline text-xs">Delete</button>
-                    </form>
+                    <ConfirmButton
+                      action={deleteCustomerAction}
+                      fields={{ id: c.id }}
+                      className="text-crit hover:underline text-xs"
+                      title="Delete this customer?"
+                      body={<>This permanently removes <b>{c.name}</b>. If they have any quotations, orders or invoices, deletion is blocked to protect those records.</>}
+                      confirmLabel="Delete customer"
+                      toastOk="Customer deleted"
+                    >
+                      Delete
+                    </ConfirmButton>
                   </td>
                 )}
               </tr>

@@ -1,17 +1,21 @@
 'use client';
-import { useActionState } from 'react';
+import { useActionState, useState } from 'react';
 import { loginAction, type LoginState } from './actions';
 import { SubmitButton } from '@/components/submit-button';
 
 const FEATURES = [
-  ['Leads → Quotes → GST invoices', 'One spine, numbers always correct'],
+  ['Leads → Quotes → Orders → GST invoices', 'One spine, numbers always correct'],
+  ['Payments & receivables', 'Track outstanding, overdue and aging'],
   ['AI assistant', 'Ask your data in English or हिन्दी'],
-  ['Smart quotation drafting', 'AI proposes items & rates — you approve'],
   ['Tenant-isolated by the database', 'Postgres row-level security'],
 ] as const;
 
+// Prefill demo creds only in local development — never ship a real login on the page.
+const isDev = process.env.NODE_ENV !== 'production';
+
 export default function LoginPage() {
   const [state, action] = useActionState<LoginState, FormData>(loginAction, {});
+  const [show, setShow] = useState(false);
 
   return (
     <div className="min-h-screen grid lg:grid-cols-2">
@@ -48,18 +52,27 @@ export default function LoginPage() {
             <div>
               <label className="label" htmlFor="email">Email</label>
               <input id="email" name="email" type="email" autoComplete="username" required
-                className="field" defaultValue="owner@msenterprises.test" />
+                className="field" defaultValue={isDev ? 'owner@msenterprises.test' : ''} placeholder="you@company.com" />
             </div>
             <div>
               <label className="label" htmlFor="password">Password</label>
-              <input id="password" name="password" type="password" autoComplete="current-password" required
-                className="field" defaultValue="password123" />
+              <div className="relative">
+                <input id="password" name="password" type={show ? 'text' : 'password'} autoComplete="current-password" required
+                  className="field pr-16" defaultValue={isDev ? 'password123' : ''} />
+                <button type="button" onClick={() => setShow((s) => !s)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-muted hover:text-ink px-1"
+                  aria-label={show ? 'Hide password' : 'Show password'}>
+                  {show ? 'Hide' : 'Show'}
+                </button>
+              </div>
             </div>
             {state.error && <p className="text-sm text-crit">{state.error}</p>}
             <SubmitButton className="btn-primary w-full">Sign in</SubmitButton>
-            <p className="text-xs text-faint text-center">
-              Demo: owner@msenterprises.test · password123
-            </p>
+            {isDev && (
+              <p className="text-xs text-faint text-center">
+                Demo: owner@msenterprises.test · password123
+              </p>
+            )}
           </form>
         </div>
       </div>

@@ -16,17 +16,36 @@ export type CurrentUser = {
   permissions: Set<string>;
 };
 
+// Best-effort brute-force throttle: lock an email after too many failures in a
+// window. In-memory (per instance) — a shared store (Redis) is the prod upgrade.
+const MAX_ATTEMPTS = 8;
+const WINDOW_MS = 15 * 60_000;
+const attempts = new Map<string, { count: number; first: number }>();
+function throttled(key: string): boolean {
+  const rec = attempts.get(key);
+  if (!rec || Date.now() - rec.first > WINDOW_MS) return false;
+  return rec.count >= MAX_ATTEMPTS;
+}
+function recordFail(key: string): void {
+  const rec = attempts.get(key);
+  if (!rec || Date.now() - rec.first > WINDOW_MS) attempts.set(key, { count: 1, first: Date.now() });
+  else rec.count++;
+}
+
 export async function login(
   email: string,
   password: string,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const normalized = email.toLowerCase().trim();
+  if (throttled(normalized)) return { ok: false, error: 'Too many failed attempts. Please wait a few minutes and try again.' };
+
   const [u] = await adminDb.select().from(users).where(eq(users.email, normalized)).limit(1);
-  if (!u || u.status !== 'active') return { ok: false, error: 'Invalid email or password' };
+  if (!u || u.status !== 'active') { recordFail(normalized); return { ok: false, error: 'Invalid email or password' }; }
 
   const valid = await bcrypt.compare(password, u.passwordHash);
-  if (!valid) return { ok: false, error: 'Invalid email or password' };
+  if (!valid) { recordFail(normalized); return { ok: false, error: 'Invalid email or password' }; }
 
+  attempts.delete(normalized);
   const token = newToken();
   const expiresAt = new Date(Date.now() + SESSION_TTL_DAYS * 86_400_000);
   await adminDb.insert(session).values({

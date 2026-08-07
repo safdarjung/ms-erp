@@ -13,7 +13,7 @@ const TENANT_TABLES = [
   'branch', 'users', 'role', 'role_permission', 'user_role',
   'session', 'audit_log', 'customer', 'lead', 'lead_activity',
   'doc_sequence', 'quotation', 'quotation_item', 'sales_order',
-  'order_item', 'tax_invoice', 'tax_invoice_item', 'ai_usage', 'ai_action',
+  'order_item', 'tax_invoice', 'tax_invoice_item', 'payment', 'ai_usage', 'ai_action',
 ];
 
 async function main() {

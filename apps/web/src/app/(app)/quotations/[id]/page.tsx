@@ -1,10 +1,12 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { formatINR } from '@ms/core';
+import { formatINR, QUOTATION_STATUS_LABELS, type QuotationStatus } from '@ms/core';
 import { getQuotation } from '@/lib/queries';
 import { requireUser, can } from '@/lib/rbac';
 import { formatDate } from '@/lib/format';
-import { convertToInvoiceAction } from '../actions';
+import { StatusPill } from '@/components/status-pill';
+import { ConfirmButton } from '@/components/confirm-button';
+import { convertToInvoiceAction, convertToOrderAction } from '../actions';
 import { QuotationStatusSelect } from '../status-select';
 
 export const metadata = { title: 'Quotation' };
@@ -16,6 +18,8 @@ export default async function QuotationDetail({ params }: { params: Promise<{ id
   if (!data?.quotation) notFound();
   const { quotation: q, items, customer: cust } = data;
   const converted = !!q.convertedInvoiceId;
+  const ordered = !!q.convertedOrderId;
+  const locked = converted || ordered;
 
   return (
     <div className="max-w-4xl">
@@ -23,22 +27,50 @@ export default async function QuotationDetail({ params }: { params: Promise<{ id
       <div className="flex items-center justify-between mb-6 gap-4 flex-wrap">
         <div className="flex items-center gap-3">
           <h1 className="text-2xl font-semibold tracking-tight font-mono">{q.number}</h1>
-          {converted || !can(user, 'quotation.edit')
-            ? <span className={`pill capitalize ${converted ? 'bg-[#e4f1ea] text-ok' : 'bg-surface-2 text-muted'}`}>{q.status}</span>
+          {locked || !can(user, 'quotation.edit')
+            ? <StatusPill status={q.status} label={QUOTATION_STATUS_LABELS[q.status as QuotationStatus] ?? q.status} />
             : <QuotationStatusSelect id={q.id} status={q.status} />}
+          {ordered && !converted && <span className="text-xs text-ok">✓ ordered</span>}
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+          {can(user, 'quotation.edit') && !locked && (
+            <Link href={`/quotations/${q.id}/edit`} className="btn-ghost">Edit</Link>
+          )}
           <a href={`/print/quotation/${q.id}`} target="_blank" rel="noreferrer" className="btn-ghost">Preview</a>
           <a href={`/print/quotation/${q.id}?print=1`} target="_blank" rel="noreferrer" className="btn-ghost">Print / PDF</a>
           {converted ? (
             <Link href={`/invoices/${q.convertedInvoiceId}`} className="btn-primary">View invoice →</Link>
+          ) : ordered ? (
+            <Link href={`/orders/${q.convertedOrderId}`} className="btn-primary">View order →</Link>
           ) : (
-            can(user, 'invoice.create') && (
-              <form action={convertToInvoiceAction}>
-                <input type="hidden" name="quotationId" value={q.id} />
-                <button className="btn-primary">Convert to invoice</button>
-              </form>
-            )
+            <>
+              {can(user, 'order.create') && (
+                <ConfirmButton
+                  action={convertToOrderAction}
+                  fields={{ quotationId: q.id }}
+                  className="btn-ghost"
+                  variant="primary"
+                  title="Convert to sales order?"
+                  body={<>This opens a sales order from <b>{q.number}</b> in the order book. GST is finalised later when you invoice.</>}
+                  confirmLabel="Create order"
+                >
+                  Convert to order
+                </ConfirmButton>
+              )}
+              {can(user, 'invoice.create') && (
+                <ConfirmButton
+                  action={convertToInvoiceAction}
+                  fields={{ quotationId: q.id }}
+                  className="btn-primary"
+                  variant="primary"
+                  title="Convert to tax invoice?"
+                  body={<>This raises a GST tax invoice from <b>{q.number}</b> and locks the quotation from further edits. This can’t be undone.</>}
+                  confirmLabel="Convert to invoice"
+                >
+                  Convert to invoice
+                </ConfirmButton>
+              )}
+            </>
           )}
         </div>
       </div>

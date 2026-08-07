@@ -240,6 +240,7 @@ export const taxInvoice = pgTable('tax_invoice', {
   tenantId: uuid('tenant_id').notNull(),
   number: varchar('number', { length: 30 }).notNull(),
   docDate: timestamp('doc_date', { withTimezone: true }).notNull().defaultNow(),
+  dueDate: timestamp('due_date', { withTimezone: true }),
   type: varchar('type', { length: 20 }).notNull().default('tax_invoice'),
   customerId: uuid('customer_id').notNull(),
   quotationId: uuid('quotation_id'),
@@ -299,6 +300,24 @@ export const aiAction = pgTable('ai_action', {
   decidedAt: timestamp('decided_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({ tenantIdx: index('ai_action_tenant_idx').on(t.tenantId, t.createdAt) }));
+
+// Customer receipts against a tax invoice (accounts-receivable). Outstanding &
+// aging are derived from these vs the invoice grand total — never stored stale.
+export const payment = pgTable('payment', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id').notNull(),
+  invoiceId: uuid('invoice_id').notNull(),
+  amount: numeric('amount', { precision: 14, scale: 2 }).notNull(),
+  paidOn: timestamp('paid_on', { withTimezone: true }).notNull().defaultNow(),
+  method: varchar('method', { length: 16 }).notNull().default('bank'),
+  reference: varchar('reference', { length: 60 }),
+  notes: text('notes'),
+  createdBy: uuid('created_by'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  tenantIdx: index('payment_tenant_idx').on(t.tenantId),
+  invoiceIdx: index('payment_invoice_idx').on(t.invoiceId),
+}));
 
 export const taxInvoiceItem = pgTable('tax_invoice_item', {
   id: uuid('id').primaryKey().defaultRandom(),

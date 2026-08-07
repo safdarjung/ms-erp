@@ -1,10 +1,11 @@
 'use server';
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
-import { invoiceInput, INVOICE_STATUSES } from '@ms/core';
+import { invoiceInput, INVOICE_STATUSES, paymentInput } from '@ms/core';
 import { withTenant, taxInvoice, eq } from '@ms/db';
 import { requirePermission } from '@/lib/rbac';
-import { insertInvoiceTx } from '@/lib/documents';
+import { insertInvoiceTx, recordPaymentTx, deletePaymentTx } from '@/lib/documents';
+import { toActionError, type ActionResult } from '@/lib/forms';
 
 export type ActionState = { error?: string };
 
@@ -42,15 +43,55 @@ export async function createInvoiceAction(_prev: ActionState, formData: FormData
   return {};
 }
 
-export async function setInvoiceStatusAction(formData: FormData): Promise<void> {
-  const u = await requirePermission('invoice.edit');
-  const id = String(formData.get('id') ?? '');
-  const status = String(formData.get('status') ?? '');
-  if (id && (INVOICE_STATUSES as readonly string[]).includes(status)) {
+export async function recordPaymentAction(_prev: ActionResult, formData: FormData): Promise<ActionResult> {
+  try {
+    const u = await requirePermission('invoice.edit');
+    const parsed = paymentInput.safeParse({
+      invoiceId: formData.get('invoiceId'),
+      amount: formData.get('amount'),
+      paidOn: formData.get('paidOn'),
+      method: formData.get('method') || undefined,
+      reference: formData.get('reference') || undefined,
+      notes: formData.get('notes') || undefined,
+    });
+    if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? 'Invalid input' };
+    await withTenant(u.tenantId, u.userId, (tx) => recordPaymentTx(tx, u, parsed.data));
+    revalidatePath(`/invoices/${parsed.data.invoiceId}`);
+    revalidatePath('/invoices');
+    revalidatePath('/dashboard');
+    return { ok: true, message: 'Payment recorded' };
+  } catch (e) {
+    return { error: toActionError(e) };
+  }
+}
+
+export async function deletePaymentAction(_prev: ActionResult, formData: FormData): Promise<ActionResult> {
+  try {
+    const u = await requirePermission('invoice.edit');
+    const paymentId = String(formData.get('paymentId') ?? '');
+    const invoiceId = String(formData.get('invoiceId') ?? '');
+    if (!paymentId) return { error: 'Missing payment' };
+    await withTenant(u.tenantId, u.userId, (tx) => deletePaymentTx(tx, u, paymentId));
+    revalidatePath(`/invoices/${invoiceId}`);
+    revalidatePath('/invoices');
+    revalidatePath('/dashboard');
+    return { ok: true, message: 'Payment removed' };
+  } catch (e) {
+    return { error: toActionError(e) };
+  }
+}
+
+export async function setInvoiceStatusAction(id: string, status: string): Promise<ActionResult> {
+  try {
+    const u = await requirePermission('invoice.edit');
+    if (!id || !(INVOICE_STATUSES as readonly string[]).includes(status)) return { error: 'Invalid status' };
     await withTenant(u.tenantId, u.userId, (tx) =>
       tx.update(taxInvoice).set({ status, updatedAt: new Date() }).where(eq(taxInvoice.id, id)),
     );
+    revalidatePath('/invoices');
+    revalidatePath(`/invoices/${id}`);
+    return { ok: true };
+  } catch (e) {
+    return { error: toActionError(e) };
   }
-  revalidatePath('/invoices');
-  revalidatePath(`/invoices/${id}`);
 }

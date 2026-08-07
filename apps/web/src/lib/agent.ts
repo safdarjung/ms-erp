@@ -4,17 +4,20 @@ import { revalidatePath } from 'next/cache';
 import {
   computeGst, isInterstate, formatINR,
   customerInput, leadInput, quotationInput, invoiceInput, quotationItemInput, invoiceItemInput,
-  INVOICE_STATUSES, LEAD_ACTIVITY_TYPES, LEAD_STAGE_LABELS, QUOTATION_SETTABLE_STATUSES,
+  INVOICE_SETTABLE_STATUSES, LEAD_ACTIVITY_TYPES, LEAD_STAGE_LABELS, QUOTATION_SETTABLE_STATUSES,
+  ORDER_CATEGORIES, MATERIAL_OWNERSHIP, ORDER_SETTABLE_STATUSES, PAYMENT_METHODS, orderInput,
   type LeadStage,
 } from '@ms/core';
 import {
-  withTenant, aiAction, customer, lead, leadActivity, quotation, taxInvoice,
-  and, count, eq, type Tx,
+  withTenant, aiAction, customer, lead, leadActivity, quotation, salesOrder, taxInvoice, payment,
+  and, count, eq, sum, type Tx,
 } from '@ms/db';
 import type { StageResult, StagedAction } from '@ms/ai';
 import type { CurrentUser } from './auth';
 import {
-  convertQuotationTx, getSupplierStateCode, insertInvoiceTx, insertQuotationTx,
+  convertQuotationTx, convertQuotationToOrderTx, convertOrderToInvoiceTx,
+  recordPaymentTx, deletePaymentTx, insertOrderTx,
+  getSupplierStateCode, insertInvoiceTx, insertQuotationTx,
   updateInvoiceTx, updateQuotationTx,
 } from './documents';
 
@@ -46,8 +49,24 @@ const logActivityInput = z.object({
   notes: z.string().trim().min(1, 'Notes are required').max(2000),
 });
 const quotationStatusInput = z.object({ id: uuidField, status: z.enum(QUOTATION_SETTABLE_STATUSES) });
-const invoiceStatusInput = z.object({ id: uuidField, status: z.enum(INVOICE_STATUSES) });
+const invoiceStatusInput = z.object({ id: uuidField, status: z.enum(INVOICE_SETTABLE_STATUSES) });
 const convertQuotationInput = z.object({ quotationId: uuidField });
+const convertQuotationToOrderInputZ = z.object({
+  quotationId: uuidField,
+  orderCategory: z.enum(ORDER_CATEGORIES).optional(),
+  materialOwnership: z.enum(MATERIAL_OWNERSHIP).optional(),
+});
+const convertOrderInput = z.object({ orderId: uuidField });
+const recordPaymentInputZ = z.object({
+  invoiceId: uuidField,
+  amount: z.coerce.number().positive('Amount must be greater than 0'),
+  paidOn: dateOnly.optional(),
+  method: z.enum(PAYMENT_METHODS).optional(),
+  reference: z.string().trim().max(60).optional(),
+});
+const paymentIdOnly = z.object({ id: uuidField });
+const orderStatusInput = z.object({ id: uuidField, status: z.enum(ORDER_SETTABLE_STATUSES) });
+const customerStatusInput = z.object({ id: uuidField, status: z.enum(['active', 'archived']) });
 const updateQuotationDocInput = z.object({
   id: uuidField,
   docDate: dateOnly.optional(),
@@ -369,6 +388,98 @@ async function buildStage(tx: Tx, kind: string, input: Record<string, unknown>):
         warning: warnings.length ? warnings.join(' ') : undefined,
       };
     }
+    case 'convert_quotation_to_order': {
+      const d = parseOrThrow(convertQuotationToOrderInputZ, input);
+      const [q] = await tx.select().from(quotation).where(eq(quotation.id, d.quotationId)).limit(1);
+      if (!q) throw new Error('Quotation not found — look the uuid up with a query first.');
+      if (q.convertedInvoiceId) throw new Error(`${q.number} is already invoiced.`);
+      if (q.convertedOrderId) throw new Error(`${q.number} already has a sales order.`);
+      const cust = await requireCustomer(tx, q.customerId);
+      const details: KV[] = [
+        { label: 'Customer', value: cust.name },
+        { label: 'Order value (ex-GST)', value: formatINR(q.subtotal) },
+      ];
+      push(details, 'Category', d.orderCategory);
+      push(details, 'Material', d.materialOwnership);
+      return { payload: d, title: `Convert ${q.number} to a sales order`, details };
+    }
+    case 'convert_order_to_invoice': {
+      const d = parseOrThrow(convertOrderInput, input);
+      const [o] = await tx.select().from(salesOrder).where(eq(salesOrder.id, d.orderId)).limit(1);
+      if (!o) throw new Error('Order not found — look the uuid up with a query first.');
+      if (o.convertedInvoiceId) throw new Error(`${o.number} is already invoiced.`);
+      if (o.status === 'cancelled') throw new Error(`${o.number} is cancelled.`);
+      const cust = await requireCustomer(tx, o.customerId);
+      return {
+        payload: d, title: `Raise a tax invoice from order ${o.number}`,
+        details: [
+          { label: 'Customer', value: cust.name },
+          { label: 'Order value (ex-GST)', value: formatINR(o.totalValue) },
+          { label: 'Invoice number', value: 'next in INV series (assigned on confirm)' },
+        ],
+      };
+    }
+    case 'record_payment': {
+      const d = parseOrThrow(recordPaymentInputZ, input);
+      const [inv] = await tx.select().from(taxInvoice).where(eq(taxInvoice.id, d.invoiceId)).limit(1);
+      if (!inv) throw new Error('Invoice not found — look the uuid up with a query first.');
+      if (inv.status === 'cancelled') throw new Error(`${inv.number} is cancelled — no payments can be recorded.`);
+      const [agg] = await tx.select({ received: sum(payment.amount) }).from(payment).where(eq(payment.invoiceId, d.invoiceId));
+      const outstanding = r2(Number(inv.grandTotal) - Number(agg?.received ?? 0));
+      if (d.amount > outstanding + 0.5) throw new Error(`That exceeds the ${formatINR(outstanding)} outstanding on ${inv.number}.`);
+      const details: KV[] = [
+        { label: 'Invoice', value: `${inv.number} · outstanding ${formatINR(outstanding)}` },
+        { label: 'Method', value: d.method ?? 'bank' },
+        { label: 'Date', value: d.paidOn ?? todayIST() },
+        { label: 'Outstanding after', value: formatINR(r2(outstanding - d.amount)) },
+      ];
+      push(details, 'Reference', d.reference);
+      return { payload: d, title: `Record ${formatINR(d.amount)} payment on ${inv.number}`, details };
+    }
+    case 'delete_payment': {
+      const d = parseOrThrow(paymentIdOnly, input);
+      const [p] = await tx.select().from(payment).where(eq(payment.id, d.id)).limit(1);
+      if (!p) throw new Error('Payment not found — look the uuid up with a query first.');
+      const [inv] = await tx.select({ number: taxInvoice.number }).from(taxInvoice).where(eq(taxInvoice.id, p.invoiceId)).limit(1);
+      return {
+        payload: d, title: `Remove ${formatINR(p.amount)} payment from ${inv?.number ?? 'invoice'}`,
+        details: [{ label: 'Date', value: p.paidOn.toISOString().slice(0, 10) }],
+        warning: 'Re-opens that amount as outstanding.',
+      };
+    }
+    case 'create_order': {
+      const d = parseOrThrow(orderInput, { ...input, docDate: input.docDate ?? todayIST() });
+      if (d.items.length > MAX_AI_ITEMS) throw new Error(`Too many items (max ${MAX_AI_ITEMS}).`);
+      const cust = await requireCustomer(tx, d.customerId);
+      const subtotal = r2(d.items.reduce((s, it) => s + it.qty * it.rate, 0));
+      const details: KV[] = [];
+      push(details, 'Customer', cust.name);
+      push(details, 'Date', d.docDate);
+      push(details, 'Delivery', d.deliveryDate);
+      push(details, 'Category', d.orderCategory);
+      push(details, 'Material', d.materialOwnership);
+      push(details, 'Order value (ex-GST)', formatINR(subtotal));
+      return { payload: d, title: `Create sales order for ${cust.name}`, details, items: docItemsPreview(d.items) };
+    }
+    case 'set_order_status': {
+      const d = parseOrThrow(orderStatusInput, input);
+      const [o] = await tx.select().from(salesOrder).where(eq(salesOrder.id, d.id)).limit(1);
+      if (!o) throw new Error('Order not found — look the uuid up with a query first.');
+      if (o.status === d.status) throw new Error(`${o.number} is already ${d.status}.`);
+      return {
+        payload: d, title: `Mark order ${o.number} as ${d.status}`,
+        details: [{ label: 'Status', value: `${o.status} → ${d.status}` }],
+      };
+    }
+    case 'set_customer_status': {
+      const d = parseOrThrow(customerStatusInput, input);
+      const cur = await requireCustomer(tx, d.id);
+      if (cur.status === d.status) throw new Error(`“${cur.name}” is already ${d.status}.`);
+      return {
+        payload: d, title: `${d.status === 'archived' ? 'Archive' : 'Restore'} customer “${cur.name}”`,
+        details: [{ label: 'Status', value: `${cur.status} → ${d.status}` }],
+      };
+    }
     default:
       throw new Error('Unknown action.');
   }
@@ -596,6 +707,79 @@ async function performAction(tx: Tx, u: U, kind: string, payload: unknown): Prom
         message: `Invoice ${inv.number} marked ${d.status}.`,
         entity: { type: 'invoice', id: d.id }, path: `/invoices/${d.id}`,
         revalidate: ['/invoices', `/invoices/${d.id}`, '/dashboard'],
+      };
+    }
+    case 'convert_quotation_to_order': {
+      const d = convertQuotationToOrderInputZ.parse(payload);
+      const res = await convertQuotationToOrderTx(tx, u, d.quotationId, {
+        orderCategory: d.orderCategory, materialOwnership: d.materialOwnership,
+      });
+      return {
+        message: res.existing ? `Already ordered — ${res.number}.` : `Sales order ${res.number} created from the quotation.`,
+        entity: { type: 'order', id: res.orderId }, path: `/orders/${res.orderId}`,
+        revalidate: ['/orders', `/orders/${res.orderId}`, '/quotations', `/quotations/${d.quotationId}`, '/dashboard'],
+      };
+    }
+    case 'convert_order_to_invoice': {
+      const d = convertOrderInput.parse(payload);
+      const res = await convertOrderToInvoiceTx(tx, u, d.orderId);
+      return {
+        message: res.existing ? `Already invoiced — ${res.number}.` : `Tax invoice ${res.number} created from the order.`,
+        entity: { type: 'invoice', id: res.invoiceId }, path: `/invoices/${res.invoiceId}`,
+        revalidate: ['/orders', `/orders/${d.orderId}`, '/invoices', `/invoices/${res.invoiceId}`, '/dashboard'],
+      };
+    }
+    case 'record_payment': {
+      const d = recordPaymentInputZ.parse(payload);
+      await recordPaymentTx(tx, u, {
+        invoiceId: d.invoiceId, amount: d.amount, paidOn: d.paidOn ?? todayIST(),
+        method: d.method ?? 'bank', reference: d.reference,
+      });
+      return {
+        message: `Payment of ${formatINR(d.amount)} recorded.`,
+        entity: { type: 'invoice', id: d.invoiceId }, path: `/invoices/${d.invoiceId}`,
+        revalidate: ['/invoices', `/invoices/${d.invoiceId}`, '/dashboard'],
+      };
+    }
+    case 'delete_payment': {
+      const d = paymentIdOnly.parse(payload);
+      const [p] = await tx.select().from(payment).where(eq(payment.id, d.id)).limit(1);
+      if (!p) throw new Error('Payment not found.');
+      await deletePaymentTx(tx, u, d.id);
+      return {
+        message: `Payment of ${formatINR(p.amount)} removed.`,
+        entity: { type: 'invoice', id: p.invoiceId }, path: `/invoices/${p.invoiceId}`,
+        revalidate: ['/invoices', `/invoices/${p.invoiceId}`, '/dashboard'],
+      };
+    }
+    case 'create_order': {
+      const d = orderInput.parse(payload);
+      const created = await insertOrderTx(tx, u, d);
+      return {
+        message: `Sales order ${created.number} created — ${formatINR(created.total)} ex-GST.`,
+        entity: { type: 'order', id: created.id }, path: `/orders/${created.id}`,
+        revalidate: ['/orders', `/orders/${created.id}`, '/dashboard'],
+      };
+    }
+    case 'set_order_status': {
+      const d = orderStatusInput.parse(payload);
+      const [o] = await tx.select().from(salesOrder).where(eq(salesOrder.id, d.id)).limit(1);
+      if (!o) throw new Error('Order not found.');
+      await tx.update(salesOrder).set({ status: d.status, updatedAt: new Date() }).where(eq(salesOrder.id, d.id));
+      return {
+        message: `Order ${o.number} marked ${d.status}.`,
+        entity: { type: 'order', id: d.id }, path: `/orders/${d.id}`,
+        revalidate: ['/orders', `/orders/${d.id}`, '/dashboard'],
+      };
+    }
+    case 'set_customer_status': {
+      const d = customerStatusInput.parse(payload);
+      const cur = await requireCustomer(tx, d.id);
+      await tx.update(customer).set({ status: d.status, updatedAt: new Date() }).where(eq(customer.id, d.id));
+      return {
+        message: `Customer “${cur.name}” ${d.status === 'archived' ? 'archived' : 'restored'}.`,
+        entity: { type: 'customer', id: d.id }, path: `/customers/${d.id}`,
+        revalidate: ['/customers', `/customers/${d.id}`, '/dashboard'],
       };
     }
     default:

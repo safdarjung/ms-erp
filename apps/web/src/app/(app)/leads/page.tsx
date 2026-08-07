@@ -1,7 +1,9 @@
 import { formatINRShort, LEAD_STAGES, LEAD_STAGE_LABELS } from '@ms/core';
 import { listLeads } from '@/lib/queries';
 import { requireUser, can } from '@/lib/rbac';
+import Link from 'next/link';
 import { FilterBar } from '@/components/filter-bar';
+import { ConfirmButton } from '@/components/confirm-button';
 import { LeadForm } from './lead-form';
 import { StageSelect } from './stage-select';
 import { convertLeadToCustomerAction } from './actions';
@@ -35,7 +37,7 @@ export default async function LeadsPage({
       <FilterBar
         basePath="/leads"
         q={q}
-        placeholder="Search name, requirement, source…"
+        placeholder="Search name, phone, requirement…"
         chipParam="stage"
         chipValue={stage}
         chips={LEAD_STAGES.map((s) => ({ value: s, label: LEAD_STAGE_LABELS[s] }))}
@@ -54,7 +56,7 @@ export default async function LeadsPage({
               <tr key={l.id} className="border-b border-line last:border-0 hover:bg-surface-2/50 [&>td]:px-4 [&>td]:py-2.5 align-middle">
                 <td className="text-muted">{l.source ?? '—'}</td>
                 <td className="font-medium text-ink">
-                  {l.customerName}
+                  <Link href={`/leads/${l.id}`} className="hover:text-accent hover:underline">{l.customerName}</Link>
                   {l.contact && <span className="text-faint font-normal"> · {l.contact}</span>}
                 </td>
                 <td className="text-muted max-w-[20rem] truncate">{l.requirement ?? '—'}</td>
@@ -68,10 +70,17 @@ export default async function LeadsPage({
                   {l.convertedCustomerId ? (
                     <span className="text-xs text-ok">✓ customer</span>
                   ) : l.stage === 'won' && canConvert ? (
-                    <form action={convertLeadToCustomerAction}>
-                      <input type="hidden" name="id" value={l.id} />
-                      <button className="text-xs text-steel hover:underline">→ Make customer</button>
-                    </form>
+                    <ConfirmButton
+                      action={convertLeadToCustomerAction}
+                      fields={{ id: l.id }}
+                      className="text-xs text-steel hover:underline"
+                      variant="primary"
+                      title="Convert lead to customer?"
+                      body={<>This creates a customer from <b>{l.customerName}</b> (or links to an existing one of the same name) so you can quote and invoice them.</>}
+                      confirmLabel="Make customer"
+                    >
+                      → Make customer
+                    </ConfirmButton>
                   ) : null}
                 </td>
               </tr>

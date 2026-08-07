@@ -3,27 +3,27 @@ import { useActionState, useMemo, useState } from 'react';
 import { computeGst, isInterstate, formatINR } from '@ms/core';
 import { SubmitButton } from '@/components/submit-button';
 import { AiPolishButton } from '@/components/ai-polish-button';
+import { LineItemsEditor, emptyRow, type LineRow } from '@/components/line-items-editor';
 import { createInvoiceAction, type ActionState } from './actions';
 
 type Cust = { id: string; name: string; stateCode: string | null; gstin: string | null };
-type Row = { description: string; hsn: string; qty: string; uom: string; rate: string; gstRate: string };
-
-const emptyRow = (): Row => ({ description: '', hsn: '', qty: '1', uom: 'NOS', rate: '', gstRate: '18' });
 
 export function InvoiceForm({
   customers,
   supplierStateCode,
   defaultTerms,
   aiEnabled,
+  defaultCustomerId = '',
 }: {
   customers: Cust[];
   supplierStateCode: string;
   defaultTerms: string;
   aiEnabled: boolean;
+  defaultCustomerId?: string;
 }) {
   const [state, action] = useActionState<ActionState, FormData>(createInvoiceAction, {});
-  const [customerId, setCustomerId] = useState('');
-  const [rows, setRows] = useState<Row[]>([emptyRow()]);
+  const [customerId, setCustomerId] = useState(defaultCustomerId);
+  const [rows, setRows] = useState<LineRow[]>([emptyRow()]);
   const [terms, setTerms] = useState(defaultTerms);
   const today = new Date().toISOString().slice(0, 10);
 
@@ -33,11 +33,7 @@ export function InvoiceForm({
     () => computeGst(rows.map((r) => ({ qty: r.qty, rate: r.rate, gstRate: r.gstRate })), interstate),
     [rows, interstate],
   );
-
-  const update = (i: number, key: keyof Row, val: string) =>
-    setRows((rs) => rs.map((r, idx) => (idx === i ? { ...r, [key]: val } : r)));
-  const addRow = () => setRows((rs) => [...rs, emptyRow()]);
-  const removeRow = (i: number) => setRows((rs) => (rs.length > 1 ? rs.filter((_, idx) => idx !== i) : rs));
+  const savable = rows.filter((r) => r.description.trim()).length;
 
   const itemsJson = JSON.stringify(
     rows.filter((r) => r.description.trim()).map((r) => ({
@@ -64,33 +60,7 @@ export function InvoiceForm({
         <div><label className="label">PO ref</label><input name="poRef" className="field" placeholder="optional" /></div>
       </div>
 
-      <div className="card overflow-x-auto">
-        <table className="w-full text-sm min-w-[820px]">
-          <thead>
-            <tr className="text-left text-faint border-b border-line text-xs uppercase tracking-wide [&>th]:px-3 [&>th]:py-2 [&>th]:font-medium">
-              <th className="w-[36%]">Description</th><th>HSN/SAC</th><th>Qty</th><th>UOM</th><th>Rate</th><th>GST %</th>
-              <th className="text-right">Amount</th><th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r, i) => (
-              <tr key={i} className="border-b border-line last:border-0 [&>td]:px-2 [&>td]:py-1.5">
-                <td><input value={r.description} onChange={(e) => update(i, 'description', e.target.value)} className="field !py-1" placeholder="Item / service" /></td>
-                <td><input value={r.hsn} onChange={(e) => update(i, 'hsn', e.target.value)} className="field !py-1 w-24" /></td>
-                <td><input value={r.qty} onChange={(e) => update(i, 'qty', e.target.value)} className="field !py-1 w-16" inputMode="decimal" /></td>
-                <td><input value={r.uom} onChange={(e) => update(i, 'uom', e.target.value)} className="field !py-1 w-16" /></td>
-                <td><input value={r.rate} onChange={(e) => update(i, 'rate', e.target.value)} className="field !py-1 w-24" inputMode="decimal" /></td>
-                <td><input value={r.gstRate} onChange={(e) => update(i, 'gstRate', e.target.value)} className="field !py-1 w-16" inputMode="decimal" /></td>
-                <td className="text-right tabular-nums font-mono">{formatINR((Number(r.qty) || 0) * (Number(r.rate) || 0))}</td>
-                <td><button type="button" onClick={() => removeRow(i)} className="text-crit text-sm px-1" aria-label="Remove row">✕</button></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        <div className="p-3 border-t border-line">
-          <button type="button" onClick={addRow} className="btn-ghost text-xs">+ Add line</button>
-        </div>
-      </div>
+      <LineItemsEditor rows={rows} setRows={setRows} />
 
       <div className="flex flex-col md:flex-row gap-5">
         <div className="flex-1">
@@ -121,7 +91,10 @@ export function InvoiceForm({
       </div>
 
       {state.error && <p className="text-sm text-crit">{state.error}</p>}
-      <div><SubmitButton className="btn-primary">Create invoice</SubmitButton></div>
+      <div className="flex items-center gap-3">
+        <SubmitButton className="btn-primary">Create invoice</SubmitButton>
+        <span className="text-xs text-faint">{savable} line{savable === 1 ? '' : 's'} will be saved</span>
+      </div>
     </form>
   );
 }

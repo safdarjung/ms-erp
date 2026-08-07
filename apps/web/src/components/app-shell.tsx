@@ -11,6 +11,7 @@ function Icon({ name }: { name: string }) {
     leads: <><path d="M12 21a9 9 0 1 0-9-9" /><path d="M12 17a5 5 0 1 0-5-5" /><circle cx="12" cy="12" r="1" /></>,
     customers: <><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M22 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" /></>,
     quotations: <><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /><path d="M8 13h8M8 17h5" /></>,
+    orders: <><path d="M3.3 7l8.7 5 8.7-5" /><path d="M12 22V12" /><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" /></>,
     invoices: <><path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1z" /><path d="M9 8h6M9 12h6M9 16h4" /></>,
     users: <><circle cx="12" cy="8" r="4" /><path d="M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1" /><path d="M19 8h3M20.5 6.5v3" /></>,
   };
@@ -23,7 +24,7 @@ function Icon({ name }: { name: string }) {
 
 const TITLES: [string, string][] = [
   ['/dashboard', 'Dashboard'], ['/leads', 'Leads'], ['/customers', 'Customers'],
-  ['/quotations', 'Quotations'], ['/invoices', 'Invoices'],
+  ['/quotations', 'Quotations'], ['/orders', 'Order book'], ['/invoices', 'Invoices'],
   ['/settings/users', 'Users'], ['/settings/password', 'Password'],
 ];
 
@@ -58,6 +59,7 @@ export function AppShell({
       group: 'Sales & GST',
       items: [
         { href: '/quotations', label: 'Quotations', icon: 'quotations' },
+        { href: '/orders', label: 'Order book', icon: 'orders' },
         { href: '/invoices', label: 'Invoices', icon: 'invoices' },
       ],
     },

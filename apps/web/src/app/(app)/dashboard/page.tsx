@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import type { ReactNode } from 'react';
 import { aiEnabled } from '@ms/ai';
 import { formatINR, formatINRShort, LEAD_STAGES, LEAD_STAGE_LABELS } from '@ms/core';
 import { requireUser } from '@/lib/rbac';
@@ -68,15 +69,12 @@ export default async function DashboardPage() {
   const pipelineValue = pipelineOpen.reduce((s, p) => s + p.value, 0);
   const maxStage = Math.max(...pipelineOpen.map((p) => p.n), 1);
 
-  const tiles = [
-    {
-      k: formatINRShort(d.invoicedThisMonth), v: 'Invoiced this month',
-      extra: <Delta now={d.invoicedThisMonth} prev={d.invoicedLastMonth} />,
-    },
-    { k: formatINRShort(pipelineValue), v: `Pipeline · ${d.leadsOpen} open leads` },
-    { k: formatINRShort(d.quotesOpen.value), v: `${d.quotesOpen.n} open quotations` },
-    { k: String(d.customers), v: 'Customers' },
-    { k: formatINRShort(d.revenue), v: `Invoiced all-time · ${d.invoices}` },
+  const tiles: { k: string; v: string; extra?: ReactNode; href?: string }[] = [
+    { k: formatINRShort(d.invoicedThisMonth), v: 'Invoiced this month', extra: <Delta now={d.invoicedThisMonth} prev={d.invoicedLastMonth} />, href: '/invoices' },
+    { k: formatINRShort(d.receivables), v: 'Receivables', extra: d.overdue > 0.5 ? <span className="text-xs font-medium text-crit">{formatINRShort(d.overdue)} overdue</span> : <span className="text-xs text-faint">on time</span>, href: '/invoices' },
+    { k: formatINRShort(d.ordersOpen.value), v: `${d.ordersOpen.n} open orders`, href: '/orders' },
+    { k: formatINRShort(d.quotesOpen.value), v: `${d.quotesOpen.n} open quotations`, href: '/quotations' },
+    { k: formatINRShort(pipelineValue), v: `Pipeline · ${d.leadsOpen} leads`, href: '/leads' },
   ];
 
   return (
@@ -84,21 +82,42 @@ export default async function DashboardPage() {
       <p className="eyebrow">Dashboard</p>
       <div className="flex flex-wrap items-end justify-between gap-3 mb-6">
         <h1 className="text-2xl font-semibold tracking-tight">{greeting()}, {firstName} 👋</h1>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Link href="/quotations/new" className="btn-primary text-xs">+ Quotation</Link>
+          <Link href="/orders/new" className="btn-ghost text-xs">+ Order</Link>
           <Link href="/invoices/new" className="btn-ghost text-xs">+ Invoice</Link>
           <Link href="/leads" className="btn-ghost text-xs">+ Lead</Link>
         </div>
       </div>
 
+      {(d.overdue > 0.5 || d.followupsDue > 0) && (
+        <div className="flex flex-wrap gap-3 mb-6">
+          {d.overdue > 0.5 && (
+            <Link href="/invoices" className="flex items-center gap-2 rounded-lg border border-crit/30 bg-[#f6e6e2]/60 px-3.5 py-2 text-sm text-crit hover:bg-[#f6e6e2] transition-colors">
+              <span aria-hidden>⚠</span> <b>{formatINR(d.overdue)}</b> overdue receivables <span aria-hidden>→</span>
+            </Link>
+          )}
+          {d.followupsDue > 0 && (
+            <Link href="/leads" className="flex items-center gap-2 rounded-lg border border-warn/30 bg-[#f6efd9]/70 px-3.5 py-2 text-sm text-warn hover:bg-[#f6efd9] transition-colors">
+              <span aria-hidden>◷</span> <b>{d.followupsDue}</b> follow-up{d.followupsDue > 1 ? 's' : ''} due <span aria-hidden>→</span>
+            </Link>
+          )}
+        </div>
+      )}
+
       <div className="grid grid-cols-2 md:grid-cols-5 gap-px bg-line border border-line rounded-lg overflow-hidden mb-6">
-        {tiles.map((t) => (
-          <div key={t.v} className="bg-surface p-5">
-            <div className="font-mono text-2xl font-semibold tracking-tight tabular-nums">{t.k}</div>
-            <div className="text-sm text-muted mt-1">{t.v}</div>
-            {t.extra && <div className="mt-1">{t.extra}</div>}
-          </div>
-        ))}
+        {tiles.map((t) => {
+          const inner = (
+            <>
+              <div className="font-mono text-2xl font-semibold tracking-tight tabular-nums">{t.k}</div>
+              <div className="text-sm text-muted mt-1">{t.v}</div>
+              {t.extra && <div className="mt-1">{t.extra}</div>}
+            </>
+          );
+          return t.href
+            ? <Link key={t.v} href={t.href} className="bg-surface p-5 hover:bg-surface-2/60 transition-colors">{inner}</Link>
+            : <div key={t.v} className="bg-surface p-5">{inner}</div>;
+        })}
       </div>
 
       <div className="grid md:grid-cols-3 gap-5">

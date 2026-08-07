@@ -7,7 +7,7 @@ export const ANALYTICS_TABLES = [
   'customer', 'lead', 'lead_activity',
   'quotation', 'quotation_item',
   'sales_order', 'order_item',
-  'tax_invoice', 'tax_invoice_item',
+  'tax_invoice', 'tax_invoice_item', 'payment',
 ] as const;
 
 export const ROW_CAP = 200;
@@ -16,8 +16,12 @@ const ALLOWED = new Set<string>(ANALYTICS_TABLES);
 
 // DDL/DML, session/config, and escape hatches. Checked on a literal-stripped
 // copy so words inside user-visible strings don't false-positive.
+// NOTE: also blocks the query-executing XML functions
+// (query_to_xml / table_to_xml / cursor_to_xml / schema_to_xml / database_to_xml
+// and their *schema variants), which can run arbitrary SQL hidden inside a string
+// literal and thereby bypass the relation allowlist.
 const FORBIDDEN =
-  /\b(insert|update|delete|merge|drop|alter|create|grant|revoke|truncate|copy|vacuum|analyze|explain|call|do|listen|notify|load|reset|discard|comment|lock|prepare|deallocate|import|reindex|cluster|checkpoint|set|into|set_config|current_setting|pg_sleep|dblink|information_schema)\b|pg_[a-z_]+/i;
+  /\b(insert|update|delete|merge|drop|alter|create|grant|revoke|truncate|copy|vacuum|analyze|explain|call|do|listen|notify|load|reset|discard|comment|lock|prepare|deallocate|import|reindex|cluster|checkpoint|set|into|set_config|current_setting|pg_sleep|dblink|information_schema)\b|pg_[a-z_]+|\b(?:query|table|cursor|schema|database)_to_xml(?:schema)?\b/i;
 
 export type GuardResult =
   | { ok: true; wrapped: string }

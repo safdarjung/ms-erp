@@ -7,10 +7,15 @@ import { InvoiceForm } from '../invoice-form';
 
 export const metadata = { title: 'New invoice' };
 
-export default async function NewInvoicePage() {
+export default async function NewInvoicePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ customer?: string }>;
+}) {
   const user = await requireUser();
   if (!can(user, 'invoice.create')) redirect('/invoices');
 
+  const { customer } = await searchParams;
   const [customers, lh] = await Promise.all([customersForSelect(), getLetterhead()]);
   const defaultTerms = lh?.defaultTerms?.join('\n') ?? '';
 
@@ -21,7 +26,7 @@ export default async function NewInvoicePage() {
         <h1 className="text-2xl font-semibold tracking-tight">New GST Invoice</h1>
         <Link href="/invoices" className="text-steel text-sm hover:underline">← Invoices</Link>
       </div>
-      <InvoiceForm customers={customers} supplierStateCode={lh?.stateCode ?? '06'} defaultTerms={defaultTerms} aiEnabled={aiEnabled()} />
+      <InvoiceForm customers={customers} supplierStateCode={lh?.stateCode ?? '06'} defaultTerms={defaultTerms} aiEnabled={aiEnabled()} defaultCustomerId={customer ?? ''} />
     </div>
   );
 }

@@ -21,7 +21,7 @@ type Part =
   | { kind: 'table'; title: string; columns: string[]; rows: Cell[][] }
   | { kind: 'chart'; spec: ChartSpec }
   | { kind: 'action'; action: ActionInfo; phase: ActionPhase; result?: string; path?: string }
-  | { kind: 'nav'; label: string; path: string };
+  | { kind: 'nav'; label: string; path: string; newTab?: boolean };
 type Msg =
   | { role: 'user'; text: string; hidden?: boolean }
   | { role: 'assistant'; parts: Part[] };
@@ -382,8 +382,11 @@ export function AssistantPanel({ enabled }: { enabled: boolean }) {
           } else if (ev.type === 'nav') {
             const path = String(ev.path ?? '/dashboard');
             const label = String(ev.label ?? 'page');
-            navigate(path, Boolean(ev.newTab));
-            patch((parts) => [...settleTools(parts), { kind: 'nav', label, path }]);
+            const newTab = Boolean(ev.newTab) || path.startsWith('/print/');
+            // In-app pages navigate immediately; new-tab/print pages can't auto-open
+            // (no user gesture → pop-up-blocked), so we render an explicit link to click.
+            if (!newTab) navigate(path, false);
+            patch((parts) => [...settleTools(parts), { kind: 'nav', label, path, newTab }]);
           } else if (ev.type === 'error') {
             patch((parts) => [...settleTools(parts), { kind: 'text', text: `⚠ ${String(ev.message ?? 'Error')}` }]);
           } else if (ev.type === 'done') {
@@ -538,7 +541,12 @@ export function AssistantPanel({ enabled }: { enabled: boolean }) {
                   if (p.kind === 'table') return <TablePart key={j} title={p.title} columns={p.columns} rows={p.rows} />;
                   if (p.kind === 'chart') return <ChartPart key={j} spec={p.spec} />;
                   if (p.kind === 'action') return <ActionCard key={j} part={p} busy={busy} onDecide={decide} onOpen={(path) => navigate(path)} />;
-                  return (
+                  return p.newTab ? (
+                    <a key={j} href={p.path} target="_blank" rel="noopener noreferrer"
+                      className="inline-flex items-center gap-2 text-xs font-medium text-accent bg-accent-soft/50 border border-accent/40 rounded-full px-3 py-1 hover:bg-accent-soft transition-colors">
+                      <span aria-hidden>↗</span> Open {p.label}
+                    </a>
+                  ) : (
                     <button key={j} onClick={() => navigate(p.path)}
                       className="inline-flex items-center gap-2 text-xs text-muted bg-surface border border-line rounded-full px-3 py-1 hover:border-accent/50 hover:text-accent transition-colors">
                       <span aria-hidden>↗</span> Opened {p.label}
