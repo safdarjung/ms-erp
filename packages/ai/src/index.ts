@@ -8,6 +8,7 @@ export type { GuardResult } from './sql-guard';
 export { runAssistant } from './assistant';
 export type {
   AssistantEvent, AssistantContext, ChatTurn, ChartSpec, QueryResult, StagedAction, StageResult,
+  EditField, EditItem,
 } from './assistant-core';
 export { ACTION_TOOLS, ACTION_TOOL_NAMES, PAGE_TARGETS } from './agent-tools';
 export { draftQuotation, quoteDraftSchema } from './quote-draft';

@@ -8,6 +8,8 @@ export const dynamic = 'force-dynamic';
 const bodySchema = z.object({
   actionId: z.string().uuid(),
   decision: z.enum(['confirm', 'cancel']),
+  /** Present when the user edited the proposal on the card before confirming. */
+  edited: z.record(z.string(), z.unknown()).optional(),
 });
 
 /**
@@ -30,6 +32,6 @@ export async function POST(req: Request): Promise<Response> {
     return Response.json({ ok: true, cancelled: true });
   }
 
-  const result = await executeAction(user, body.actionId);
+  const result = await executeAction(user, body.actionId, body.edited);
   return Response.json(result, { status: result.ok ? 200 : 422 });
 }

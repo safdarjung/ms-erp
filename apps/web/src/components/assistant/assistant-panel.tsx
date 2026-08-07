@@ -6,6 +6,8 @@ import { useRouter } from 'next/navigation';
 
 type ChartSpec = { title: string; kind: 'bar'; labels: string[]; values: number[] };
 type Cell = string | number | boolean | null;
+type EditField = { key: string; label: string; type: 'text' | 'number' | 'date' | 'textarea' | 'select'; options?: string[] };
+type EditItem = { description: string; hsn?: string; qty: number; uom?: string; rate: number; gstRate: number; isToolingCharge?: boolean };
 type ActionInfo = {
   actionId: string;
   kind: string;
@@ -13,6 +15,9 @@ type ActionInfo = {
   details: { label: string; value: string }[];
   items?: string[];
   warning?: string;
+  editable?: EditField[];
+  payload?: Record<string, unknown>;
+  editItems?: EditItem[];
 };
 type ActionPhase = 'pending' | 'executing' | 'executed' | 'cancelled' | 'failed';
 type Part =
@@ -149,6 +154,8 @@ const PHASE_CHIP: Record<ActionPhase, { label: string; cls: string }> = {
   failed: { label: 'Failed', cls: 'bg-[#f6e5e1] text-crit' },
 };
 
+type CardRow = { description: string; hsn?: string; qty: string; uom?: string; rate: string; gstRate: string; isToolingCharge?: boolean };
+
 function ActionCard({
   part,
   busy,
@@ -157,7 +164,7 @@ function ActionCard({
 }: {
   part: Extract<Part, { kind: 'action' }>;
   busy: boolean;
-  onDecide: (actionId: string, decision: 'confirm' | 'cancel') => void;
+  onDecide: (actionId: string, decision: 'confirm' | 'cancel', edited?: Record<string, unknown>) => void;
   onOpen: (path: string) => void;
 }) {
   const a = part.action;
@@ -166,6 +173,42 @@ function ActionCard({
     part.phase === 'executed' ? 'border-ok/40' :
     part.phase === 'failed' ? 'border-crit/40' :
     part.phase === 'cancelled' ? 'border-line' : 'border-accent/50';
+  const canEdit = part.phase === 'pending' && !!a.editable?.length;
+
+  const [editing, setEditing] = useState(false);
+  const [form, setForm] = useState<Record<string, string>>(() => {
+    const f: Record<string, string> = {};
+    for (const fld of a.editable ?? []) f[fld.key] = a.payload?.[fld.key] == null ? '' : String(a.payload[fld.key]);
+    return f;
+  });
+  const [rows, setRows] = useState<CardRow[]>(() =>
+    (a.editItems ?? []).map((it) => ({
+      description: it.description, hsn: it.hsn, qty: String(it.qty), uom: it.uom,
+      rate: String(it.rate), gstRate: String(it.gstRate), isToolingCharge: it.isToolingCharge,
+    })),
+  );
+  const updateRow = (i: number, patch: Partial<CardRow>) => setRows((rs) => rs.map((r, x) => (x === i ? { ...r, ...patch } : r)));
+  const hasTooling = (a.editItems ?? []).some((it) => it.isToolingCharge !== undefined);
+
+  const discard = () => {
+    const f: Record<string, string> = {};
+    for (const fld of a.editable ?? []) f[fld.key] = a.payload?.[fld.key] == null ? '' : String(a.payload[fld.key]);
+    setForm(f);
+    setRows((a.editItems ?? []).map((it) => ({ description: it.description, hsn: it.hsn, qty: String(it.qty), uom: it.uom, rate: String(it.rate), gstRate: String(it.gstRate), isToolingCharge: it.isToolingCharge })));
+    setEditing(false);
+  };
+  const submit = () => {
+    if (!editing) { onDecide(a.actionId, 'confirm'); return; }
+    const edited: Record<string, unknown> = { ...(a.payload ?? {}), ...form };
+    if (a.editItems) {
+      edited.items = rows.filter((r) => r.description.trim()).map((r) => ({
+        description: r.description, hsn: r.hsn, qty: Number(r.qty) || 0, uom: r.uom,
+        rate: Number(r.rate) || 0, gstRate: Number(r.gstRate) || 0,
+        ...(hasTooling ? { isToolingCharge: !!r.isToolingCharge } : {}),
+      }));
+    }
+    onDecide(a.actionId, 'confirm', edited);
+  };
 
   return (
     <div className={`border ${border} rounded-xl bg-surface overflow-hidden shadow-sm`}>
@@ -175,7 +218,8 @@ function ActionCard({
         <span className={`pill shrink-0 ${chip.cls}`}>{chip.label}</span>
       </div>
 
-      {(a.details.length > 0 || a.items?.length || a.warning) && (
+      {/* Read-only preview */}
+      {(!editing || part.phase !== 'pending') && (a.details.length > 0 || a.items?.length || a.warning) && (
         <div className="px-3.5 py-2.5 space-y-2">
           {a.details.length > 0 && (
             <dl className="text-xs space-y-1">
@@ -198,16 +242,70 @@ function ActionCard({
         </div>
       )}
 
+      {/* Edit mode */}
+      {editing && part.phase === 'pending' && (
+        <div className="px-3.5 py-2.5 space-y-2.5">
+          <div className="grid grid-cols-2 gap-2">
+            {(a.editable ?? []).map((fld) => (
+              <label key={fld.key} className={`text-xs ${fld.type === 'textarea' ? 'col-span-2' : ''}`}>
+                <span className="text-faint">{fld.label}</span>
+                {fld.type === 'textarea' ? (
+                  <textarea value={form[fld.key] ?? ''} onChange={(e) => setForm((f) => ({ ...f, [fld.key]: e.target.value }))} rows={2} className="field !py-1 mt-0.5" />
+                ) : fld.type === 'select' ? (
+                  <select value={form[fld.key] ?? ''} onChange={(e) => setForm((f) => ({ ...f, [fld.key]: e.target.value }))} className="field !py-1 mt-0.5 capitalize">
+                    {(fld.options ?? []).map((o) => <option key={o} value={o}>{o.replace(/_/g, ' ')}</option>)}
+                  </select>
+                ) : (
+                  <input type={fld.type === 'number' ? 'number' : fld.type === 'date' ? 'date' : 'text'}
+                    value={form[fld.key] ?? ''} onChange={(e) => setForm((f) => ({ ...f, [fld.key]: e.target.value }))}
+                    className="field !py-1 mt-0.5" inputMode={fld.type === 'number' ? 'decimal' : undefined} />
+                )}
+              </label>
+            ))}
+          </div>
+          {a.editItems && (
+            <div className="space-y-2">
+              <div className="text-[0.62rem] font-mono uppercase tracking-wider text-faint">Line items</div>
+              {rows.map((r, i) => (
+                <div key={i} className="border border-line rounded-lg p-2 space-y-1.5 bg-surface-2/40">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[0.6rem] font-mono uppercase text-faint">Line {i + 1}</span>
+                    <button type="button" onClick={() => setRows((rs) => rs.filter((_, x) => x !== i))} className="text-crit text-[0.7rem]">Remove</button>
+                  </div>
+                  <input value={r.description} onChange={(e) => updateRow(i, { description: e.target.value })} className="field !py-1 text-xs" placeholder="Description" />
+                  <div className="grid grid-cols-3 gap-1.5">
+                    <input value={r.qty} onChange={(e) => updateRow(i, { qty: e.target.value })} className="field !py-1 text-xs" inputMode="decimal" placeholder="Qty" aria-label="Qty" />
+                    <input value={r.rate} onChange={(e) => updateRow(i, { rate: e.target.value })} className="field !py-1 text-xs" inputMode="decimal" placeholder="Rate" aria-label="Rate" />
+                    <input value={r.gstRate} onChange={(e) => updateRow(i, { gstRate: e.target.value })} className="field !py-1 text-xs" inputMode="decimal" placeholder="GST%" aria-label="GST %" />
+                  </div>
+                  {hasTooling && (
+                    <label className="flex items-center gap-1.5 text-[0.7rem] text-muted"><input type="checkbox" checked={!!r.isToolingCharge} onChange={(e) => updateRow(i, { isToolingCharge: e.target.checked })} /> Tooling / NRE</label>
+                  )}
+                </div>
+              ))}
+              <button type="button" onClick={() => setRows((rs) => [...rs, { description: '', hsn: '84807100', qty: '1', uom: 'NOS', rate: '', gstRate: '18', ...(hasTooling ? { isToolingCharge: false } : {}) }])} className="text-xs text-accent">+ Add line</button>
+            </div>
+          )}
+          <p className="text-[0.7rem] text-faint">Totals &amp; GST are recomputed after you save.</p>
+        </div>
+      )}
+
       {part.phase === 'pending' && (
-        <div className="flex gap-2 px-3.5 py-2.5 border-t border-line bg-surface-2/40">
-          <button onClick={() => onDecide(a.actionId, 'confirm')} disabled={busy}
-            className="btn-primary !py-1.5 text-xs flex-1 disabled:opacity-50">
-            Confirm &amp; run
-          </button>
-          <button onClick={() => onDecide(a.actionId, 'cancel')} disabled={busy}
-            className="btn-ghost !py-1.5 text-xs disabled:opacity-50">
-            Cancel
-          </button>
+        <div className="border-t border-line bg-surface-2/40">
+          {canEdit && (
+            <button onClick={() => (editing ? discard() : setEditing(true))} disabled={busy}
+              className="w-full text-left px-3.5 pt-2 text-xs text-steel hover:underline disabled:opacity-50">
+              {editing ? '↩ Discard edits' : '✎ Edit before confirming'}
+            </button>
+          )}
+          <div className="flex gap-2 px-3.5 py-2.5">
+            <button onClick={submit} disabled={busy} className="btn-primary !py-1.5 text-xs flex-1 disabled:opacity-50">
+              {editing ? 'Save & run' : 'Confirm & run'}
+            </button>
+            <button onClick={() => onDecide(a.actionId, 'cancel')} disabled={busy} className="btn-ghost !py-1.5 text-xs disabled:opacity-50">
+              Cancel
+            </button>
+          </div>
         </div>
       )}
       {part.phase === 'executed' && part.result && (
@@ -407,13 +505,13 @@ export function AssistantPanel({ enabled }: { enabled: boolean }) {
   }, [navigate, patchAction, updateMsgs]);
 
   /** Confirm/cancel a staged action; on confirm, execute + let the model continue. */
-  const decide = useCallback(async (actionId: string, decision: 'confirm' | 'cancel') => {
+  const decide = useCallback(async (actionId: string, decision: 'confirm' | 'cancel', edited?: Record<string, unknown>) => {
     patchAction(actionId, { phase: decision === 'confirm' ? 'executing' : 'cancelled' });
     try {
       const res = await fetch('/api/assistant/action', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ actionId, decision }),
+        body: JSON.stringify({ actionId, decision, ...(edited ? { edited } : {}) }),
       });
       if (decision === 'cancel') return;
       const j = await res.json() as { ok?: boolean; message?: string; error?: string; path?: string; entity?: { type: string; id: string } };

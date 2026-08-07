@@ -4,7 +4,7 @@ import { revalidatePath } from 'next/cache';
 import {
   computeGst, isInterstate, formatINR,
   customerInput, leadInput, quotationInput, invoiceInput, quotationItemInput, invoiceItemInput,
-  INVOICE_SETTABLE_STATUSES, LEAD_ACTIVITY_TYPES, LEAD_STAGE_LABELS, QUOTATION_SETTABLE_STATUSES,
+  INVOICE_SETTABLE_STATUSES, LEAD_ACTIVITY_TYPES, LEAD_STAGE_LABELS, LEAD_STAGES, QUOTATION_SETTABLE_STATUSES,
   ORDER_CATEGORIES, MATERIAL_OWNERSHIP, ORDER_SETTABLE_STATUSES, PAYMENT_METHODS, orderInput,
   type LeadStage,
 } from '@ms/core';
@@ -12,7 +12,7 @@ import {
   withTenant, aiAction, customer, lead, leadActivity, quotation, salesOrder, taxInvoice, payment,
   and, count, eq, sum, type Tx,
 } from '@ms/db';
-import type { StageResult, StagedAction } from '@ms/ai';
+import type { StageResult, StagedAction, EditField, EditItem } from '@ms/ai';
 import type { CurrentUser } from './auth';
 import {
   convertQuotationTx, convertQuotationToOrderTx, convertOrderToInvoiceTx,
@@ -120,6 +120,58 @@ const LEAD_LABELS: Record<string, string> = {
   customerName: 'Customer', contact: 'Contact', phone: 'Phone', email: 'Email', source: 'Source',
   requirement: 'Requirement', stage: 'Stage', valueEstimate: 'Est. value (₹)', nextFollowupAt: 'Next follow-up',
 };
+
+// Fields the user may edit inline on the confirmation card, per action kind.
+const CUSTOMER_EDIT: EditField[] = [
+  { key: 'name', label: 'Name', type: 'text' },
+  { key: 'regType', label: 'Registration', type: 'select', options: ['unregistered', 'registered'] },
+  { key: 'gstin', label: 'GSTIN', type: 'text' },
+  { key: 'stateCode', label: 'State code', type: 'text' },
+  { key: 'contactPerson', label: 'Contact', type: 'text' },
+  { key: 'phone', label: 'Phone', type: 'text' },
+  { key: 'email', label: 'Email', type: 'text' },
+  { key: 'address', label: 'Address', type: 'textarea' },
+  { key: 'creditTermsDays', label: 'Credit days', type: 'number' },
+];
+const LEAD_EDIT: EditField[] = [
+  { key: 'customerName', label: 'Customer', type: 'text' },
+  { key: 'contact', label: 'Contact', type: 'text' },
+  { key: 'phone', label: 'Phone', type: 'text' },
+  { key: 'email', label: 'Email', type: 'text' },
+  { key: 'source', label: 'Source', type: 'text' },
+  { key: 'requirement', label: 'Requirement', type: 'textarea' },
+  { key: 'stage', label: 'Stage', type: 'select', options: [...LEAD_STAGES] },
+  { key: 'valueEstimate', label: 'Est. value (₹)', type: 'number' },
+  { key: 'nextFollowupAt', label: 'Next follow-up', type: 'date' },
+];
+const F_DATE: EditField = { key: 'docDate', label: 'Date', type: 'date' };
+const F_TERMS: EditField = { key: 'terms', label: 'Terms', type: 'textarea' };
+const F_NOTES: EditField = { key: 'notes', label: 'Notes', type: 'textarea' };
+const F_PO: EditField = { key: 'poRef', label: 'PO ref', type: 'text' };
+
+/** The editable spec for a staged action, or undefined for non-editable kinds. */
+function editableFor(kind: string, payload: unknown): { fields: EditField[]; items?: EditItem[] } | undefined {
+  const p = (payload ?? {}) as Record<string, unknown>;
+  const items = Array.isArray(p.items) ? (p.items as EditItem[]) : undefined;
+  // Only the CREATE actions (+ payments) — their staged payload is complete, so
+  // the inputs pre-fill cleanly. Edits to existing records use the edit pages.
+  switch (kind) {
+    case 'create_customer': return { fields: CUSTOMER_EDIT };
+    case 'create_lead': return { fields: LEAD_EDIT };
+    case 'create_quotation':
+      return { fields: [F_DATE, { key: 'validityDays', label: 'Validity (days)', type: 'number' }, F_TERMS, F_NOTES], items };
+    case 'create_invoice':
+      return { fields: [F_DATE, F_PO, F_TERMS], items };
+    case 'create_order':
+      return { fields: [F_DATE, { key: 'deliveryDate', label: 'Delivery', type: 'date' }, F_PO,
+        { key: 'orderCategory', label: 'Category', type: 'select', options: [...ORDER_CATEGORIES] },
+        { key: 'materialOwnership', label: 'Material', type: 'select', options: [...MATERIAL_OWNERSHIP] }], items };
+    case 'record_payment':
+      return { fields: [{ key: 'amount', label: 'Amount (₹)', type: 'number' }, { key: 'paidOn', label: 'Date', type: 'date' },
+        { key: 'method', label: 'Method', type: 'select', options: [...PAYMENT_METHODS] }, { key: 'reference', label: 'Reference', type: 'text' }] };
+    default: return undefined;
+  }
+}
 
 /** "field: old → new" rows for update previews, only for the fields provided. */
 function diffDetails(
@@ -502,9 +554,13 @@ export async function stageAction(
         payload: staged.payload, summary: staged.title,
         expiresAt: new Date(Date.now() + EXPIRE_MINUTES * 60_000),
       }).returning({ id: aiAction.id });
+      const spec = editableFor(kind, staged.payload);
       const action: StagedAction = {
         actionId: row!.id, kind, title: staged.title, details: staged.details,
         items: staged.items, warning: staged.warning,
+        editable: spec?.fields,
+        payload: spec ? (staged.payload as Record<string, unknown>) : undefined,
+        editItems: spec?.items,
       };
       return { ok: true as const, action };
     });
@@ -787,7 +843,7 @@ async function performAction(tx: Tx, u: U, kind: string, payload: unknown): Prom
   }
 }
 
-export async function executeAction(user: CurrentUser, actionId: string): Promise<ExecResult> {
+export async function executeAction(user: CurrentUser, actionId: string, edited?: Record<string, unknown>): Promise<ExecResult> {
   let performed: Performed;
   try {
     performed = await withTenant(user.tenantId, user.userId, async (tx) => {
@@ -799,7 +855,15 @@ export async function executeAction(user: CurrentUser, actionId: string): Promis
       const row = claimed[0];
       if (!row) throw new Error('This proposal is no longer pending — ask the assistant again.');
       if (row.expiresAt.getTime() < Date.now()) throw new Error('This proposal expired — ask the assistant again.');
-      const out = await performAction(tx, user, row.kind, row.payload);
+      let payload = row.payload;
+      // The user edited the proposal on the card — re-validate their input through
+      // the SAME staging pipeline (zod + business checks) before executing.
+      if (edited && editableFor(row.kind, row.payload)) {
+        const restaged = await buildStage(tx, row.kind, edited);
+        payload = restaged.payload as typeof row.payload;
+        await tx.update(aiAction).set({ payload, summary: restaged.title }).where(eq(aiAction.id, actionId));
+      }
+      const out = await performAction(tx, user, row.kind, payload);
       await tx.update(aiAction).set({ result: out }).where(eq(aiAction.id, actionId));
       return out;
     });

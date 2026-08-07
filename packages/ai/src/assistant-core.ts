@@ -13,6 +13,19 @@ export type QueryResult = {
   truncated: boolean;
 };
 
+/** An editable scalar field the user can tweak on the confirmation card. */
+export type EditField = {
+  key: string;
+  label: string;
+  type: 'text' | 'number' | 'date' | 'textarea' | 'select';
+  options?: string[];
+};
+
+/** An editable line item (documents) on the confirmation card. */
+export type EditItem = {
+  description: string; hsn?: string; qty: number; uom?: string; rate: number; gstRate: number; isToolingCharge?: boolean;
+};
+
 /** A write the agent proposed, staged server-side, awaiting user confirmation. */
 export type StagedAction = {
   actionId: string;
@@ -22,6 +35,12 @@ export type StagedAction = {
   /** Line-item preview rows (documents). */
   items?: string[];
   warning?: string;
+  /** Present when the user may edit the proposal inline before confirming. */
+  editable?: EditField[];
+  /** Raw current values keyed by field, for pre-filling the edit inputs. */
+  payload?: Record<string, unknown>;
+  /** Structured line items to edit (documents). */
+  editItems?: EditItem[];
 };
 
 export type StageResult =
