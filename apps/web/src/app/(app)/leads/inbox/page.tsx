@@ -1,7 +1,8 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { requireUser, can } from '@/lib/rbac';
-import { listInboundMessages, inboxPendingCount } from '@/lib/queries';
+import { listInboundMessages, inboxPendingCount, getOutreachSettings } from '@/lib/queries';
+import { buildWhatsappLink } from '@/lib/outreach';
 import { formatDate } from '@/lib/format';
 import { FilterBar } from '@/components/filter-bar';
 import { InboxRow, type InboxMessage } from './inbox-row';
@@ -27,7 +28,9 @@ export default async function LeadInboxPage({
   const user = await requireUser();
   if (!can(user, 'lead_inbox.view')) redirect('/dashboard');
 
-  const [rows, pending] = await Promise.all([listInboundMessages(status, q), inboxPendingCount()]);
+  const [rows, pending, outreach] = await Promise.all([
+    listInboundMessages(status, q), inboxPendingCount(), getOutreachSettings(),
+  ]);
   const canManage = can(user, 'lead_inbox.manage');
   const canManageChannels = can(user, 'lead_channel.manage');
 
@@ -41,6 +44,18 @@ export default async function LeadInboxPage({
       size: a.size,
       url: a.path ? await signedUrl(a.path) : null,
     })));
+    const prefill = {
+      customerName: p.customerName ?? r.fromName ?? r.subject ?? '',
+      contact: p.contact ?? r.fromName ?? '',
+      phone: p.phone ?? r.fromPhone ?? '',
+      email: p.email ?? r.fromEmail ?? '',
+      requirement: p.requirement ?? r.subject ?? '',
+      source,
+    };
+    const waHref = buildWhatsappLink({
+      phone: prefill.phone, name: prefill.contact || prefill.customerName,
+      product: prefill.requirement, settings: outreach,
+    });
     return {
       id: r.id,
       status: r.status,
@@ -53,14 +68,8 @@ export default async function LeadInboxPage({
       dedupeReason: r.dedupeReason,
       leadId: r.leadId,
       attachments,
-      prefill: {
-        customerName: p.customerName ?? r.fromName ?? r.subject ?? '',
-        contact: p.contact ?? r.fromName ?? '',
-        phone: p.phone ?? r.fromPhone ?? '',
-        email: p.email ?? r.fromEmail ?? '',
-        requirement: p.requirement ?? r.subject ?? '',
-        source,
-      },
+      waHref,
+      prefill,
     };
   }));
 

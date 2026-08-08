@@ -4,6 +4,7 @@ import { useActionState, useEffect } from 'react';
 import { StatusPill } from '@/components/status-pill';
 import { SubmitButton } from '@/components/submit-button';
 import { ConfirmButton } from '@/components/confirm-button';
+import { WhatsappButton } from '@/components/whatsapp-button';
 import { useToast } from '@/components/toast';
 import { createLeadFromInboundAction, ignoreInboundAction, type ActionState } from './actions';
 
@@ -18,6 +19,7 @@ export type InboxMessage = {
   parseMethod: string;
   dedupeReason: string | null;
   leadId: string | null;
+  waHref: string | null;
   attachments: { name: string; mimeType: string; size: number; url: string | null }[];
   prefill: {
     customerName: string;
@@ -59,7 +61,8 @@ export function InboxRow({ message: m, canManage }: { message: InboxMessage; can
             <div className="text-xs text-faint mt-1">{m.dedupeReason}</div>
           )}
         </div>
-        <div className="shrink-0 text-right">
+        <div className="shrink-0 flex flex-col items-end gap-1.5">
+          {m.waHref && <WhatsappButton href={m.waHref} />}
           {m.leadId ? (
             <Link href={`/leads/${m.leadId}`} className="text-xs text-steel hover:underline">View lead →</Link>
           ) : null}

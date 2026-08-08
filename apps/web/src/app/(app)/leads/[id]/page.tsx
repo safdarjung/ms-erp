@@ -2,11 +2,13 @@ import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { notFound } from 'next/navigation';
 import { formatINR, LEAD_STAGE_LABELS, type LeadStage } from '@ms/core';
-import { getLead, usersForSelect } from '@/lib/queries';
+import { getLead, usersForSelect, getOutreachSettings } from '@/lib/queries';
+import { buildWhatsappLink } from '@/lib/outreach';
 import { requireUser, can } from '@/lib/rbac';
 import { formatDate } from '@/lib/format';
 import { StatusPill } from '@/components/status-pill';
 import { ConfirmButton } from '@/components/confirm-button';
+import { WhatsappButton } from '@/components/whatsapp-button';
 import { StageSelect } from '../stage-select';
 import { convertLeadToCustomerAction } from '../actions';
 import { OwnerSelect, ActivityForm, LeadEditForm } from '../lead-detail';
@@ -24,6 +26,8 @@ export default async function LeadDetail({ params }: { params: Promise<{ id: str
   const { lead: l, activities, ownerName } = data;
   const canEdit = can(user, 'lead.edit');
   const users = canEdit ? await usersForSelect() : [];
+  const outreach = await getOutreachSettings();
+  const wa = buildWhatsappLink({ phone: l.phone, name: l.contact || l.customerName, product: l.requirement, settings: outreach });
 
   const followupOverdue = l.nextFollowupAt && new Date(l.nextFollowupAt).getTime() < Date.now() && !['won', 'lost'].includes(l.stage);
 
@@ -37,7 +41,8 @@ export default async function LeadDetail({ params }: { params: Promise<{ id: str
             ? <StageSelect id={l.id} stage={l.stage} />
             : <StatusPill status={l.stage} label={LEAD_STAGE_LABELS[l.stage as LeadStage] ?? l.stage} />}
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 items-center">
+          {wa && <WhatsappButton href={wa} prominent />}
           {l.convertedCustomerId ? (
             <Link href={`/customers/${l.convertedCustomerId}`} className="btn-ghost">View customer →</Link>
           ) : l.stage === 'won' && can(user, 'customer.create') ? (

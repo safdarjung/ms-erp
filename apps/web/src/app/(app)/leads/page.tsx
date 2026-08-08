@@ -5,6 +5,7 @@ import { requireUser, can } from '@/lib/rbac';
 import Link from 'next/link';
 import { FilterBar } from '@/components/filter-bar';
 import { ConfirmButton } from '@/components/confirm-button';
+import { WhatsappButton } from '@/components/whatsapp-button';
 import { LeadForm } from './lead-form';
 import { StageSelect } from './stage-select';
 import { convertLeadToCustomerAction } from './actions';
@@ -72,11 +73,7 @@ export default async function LeadsPage({
                   <div className="flex items-center justify-end gap-3">
                     {(() => {
                       const wa = buildWhatsappLink({ phone: l.phone, name: l.contact || l.customerName, product: l.requirement, settings: outreach });
-                      return wa ? (
-                        <a href={wa} target="_blank" rel="noreferrer" className="text-xs font-medium text-[#128C7E] hover:underline" title="Send intro on WhatsApp">
-                          WhatsApp
-                        </a>
-                      ) : null;
+                      return wa ? <WhatsappButton href={wa} /> : null;
                     })()}
                     {l.convertedCustomerId ? (
                       <span className="text-xs text-ok">✓ customer</span>
