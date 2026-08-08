@@ -166,6 +166,123 @@ export async function getQuotation(id: string) {
   });
 }
 
+export type AnalyticsData = Awaited<ReturnType<typeof analyticsData>>;
+
+/** Owner analytics: sales trends, receivables aging, growth, order book, GST. */
+export async function analyticsData() {
+  const u = await requireUser();
+  const now = new Date();
+  const iso = (d: Date) => d.toISOString();
+  const dow = (now.getDay() + 6) % 7; // Monday = 0
+  const weekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - dow);
+  const lastWeekStart = new Date(weekStart); lastWeekStart.setDate(weekStart.getDate() - 7);
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const fyStartYear = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+  const fyStart = new Date(fyStartYear, 3, 1);
+  const lastFyStart = new Date(fyStartYear - 1, 3, 1);
+  const twelveMoAgo = new Date(now.getFullYear(), now.getMonth() - 11, 1);
+
+  const months: { m: string; label: string }[] = [];
+  for (let i = 11; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    months.push({ m: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`, label: d.toLocaleDateString('en-IN', { month: 'short' }) });
+  }
+  const fillMonthly = (rows: { m: string; v: unknown }[]) => {
+    const map = new Map(rows.map((r) => [r.m, Number(r.v)]));
+    return months.map((k) => ({ ...k, value: map.get(k.m) ?? 0 }));
+  };
+
+  return withTenant(u.tenantId, u.userId, async (tx) => {
+    const notCancelled = sql`${taxInvoice.status} <> 'cancelled'`;
+    const invSum = async (from: Date, to?: Date) => {
+      const [r] = await tx.select({ v: sql<string>`coalesce(sum(${taxInvoice.grandTotal}),0)`, n: count() })
+        .from(taxInvoice)
+        .where(to
+          ? and(notCancelled, sql`${taxInvoice.docDate} >= ${iso(from)} and ${taxInvoice.docDate} < ${iso(to)}`)
+          : and(notCancelled, sql`${taxInvoice.docDate} >= ${iso(from)}`));
+      return { v: Number(r?.v ?? 0), n: Number(r?.n ?? 0) };
+    };
+
+    const [week, lastWeek, month, lastMonth, fy, lastFy, allTime] = await Promise.all([
+      invSum(weekStart), invSum(lastWeekStart, weekStart),
+      invSum(monthStart), invSum(lastMonthStart, monthStart),
+      invSum(fyStart), invSum(lastFyStart, fyStart),
+      invSum(new Date(0)),
+    ]);
+
+    const monthExpr = (col: typeof taxInvoice.docDate) => sql<string>`to_char(date_trunc('month', ${col}),'YYYY-MM')`;
+    const revByMonth = fillMonthly(await tx.select({ m: monthExpr(taxInvoice.docDate), v: sql<string>`coalesce(sum(${taxInvoice.grandTotal}),0)` })
+      .from(taxInvoice).where(and(notCancelled, sql`${taxInvoice.docDate} >= ${iso(twelveMoAgo)}`)).groupBy(sql`1`));
+    const collectionsByMonth = fillMonthly(await tx.select({ m: sql<string>`to_char(date_trunc('month', ${payment.paidOn}),'YYYY-MM')`, v: sql<string>`coalesce(sum(${payment.amount}),0)` })
+      .from(payment).where(sql`${payment.paidOn} >= ${iso(twelveMoAgo)}`).groupBy(sql`1`));
+    const newCustomersByMonth = fillMonthly(await tx.select({ m: sql<string>`to_char(date_trunc('month', ${customer.createdAt}),'YYYY-MM')`, v: sql<string>`count(*)` })
+      .from(customer).where(sql`${customer.createdAt} >= ${iso(twelveMoAgo)}`).groupBy(sql`1`));
+
+    const [customers] = await tx.select({ n: count() }).from(customer);
+    const topCustomers = await tx.select({ name: customer.name, v: sql<string>`coalesce(sum(${taxInvoice.grandTotal}),0)` })
+      .from(taxInvoice).innerJoin(customer, eq(customer.id, taxInvoice.customerId))
+      .where(notCancelled).groupBy(customer.id, customer.name)
+      .orderBy(desc(sql`coalesce(sum(${taxInvoice.grandTotal}),0)`)).limit(8);
+
+    // Receivables aging (JS bucketing from per-invoice outstanding).
+    const arRows = await tx.select({ grand: taxInvoice.grandTotal, due: taxInvoice.dueDate, status: taxInvoice.status, received: sql<string>`coalesce(sum(${payment.amount}),0)` })
+      .from(taxInvoice).leftJoin(payment, eq(payment.invoiceId, taxInvoice.id)).where(notCancelled).groupBy(taxInvoice.id);
+    const aging = { current: 0, d30: 0, d60: 0, d60plus: 0, total: 0 };
+    for (const r of arRows) {
+      const outstanding = Math.round((Number(r.grand) - Number(r.received)) * 100) / 100;
+      if (outstanding <= 0.5) continue;
+      aging.total += outstanding;
+      const due = r.due ? new Date(r.due) : null;
+      const overdueDays = due ? Math.floor((now.getTime() - due.getTime()) / 86_400_000) : -1;
+      if (overdueDays <= 0) aging.current += outstanding;
+      else if (overdueDays <= 30) aging.d30 += outstanding;
+      else if (overdueDays <= 60) aging.d60 += outstanding;
+      else aging.d60plus += outstanding;
+    }
+
+    const ordersByStatus = await tx.select({ status: salesOrder.status, n: count(), v: sql<string>`coalesce(sum(${salesOrder.totalValue}),0)` }).from(salesOrder).groupBy(salesOrder.status);
+    const ordersByCategory = await tx.select({ category: salesOrder.orderCategory, n: count(), v: sql<string>`coalesce(sum(${salesOrder.totalValue}),0)` }).from(salesOrder).groupBy(salesOrder.orderCategory);
+
+    const quotesByStatus = await tx.select({ status: quotation.status, n: count(), v: sql<string>`coalesce(sum(${quotation.grandTotal}),0)` }).from(quotation).groupBy(quotation.status);
+    const [orderedQuotes] = await tx.select({ n: count() }).from(quotation).where(sql`${quotation.convertedOrderId} is not null`);
+
+    const leadsByStage = await tx.select({ stage: lead.stage, n: count(), v: sql<string>`coalesce(sum(${lead.valueEstimate}),0)` }).from(lead).groupBy(lead.stage);
+    const leadsBySource = await tx.select({ source: lead.source, n: count() }).from(lead).where(sql`${lead.source} is not null and ${lead.source} <> ''`).groupBy(lead.source).orderBy(desc(count())).limit(6);
+
+    const [gst] = await tx.select({
+      taxable: sql<string>`coalesce(sum(${taxInvoice.subtotal}),0)`,
+      cgst: sql<string>`coalesce(sum(${taxInvoice.cgst}),0)`,
+      sgst: sql<string>`coalesce(sum(${taxInvoice.sgst}),0)`,
+      igst: sql<string>`coalesce(sum(${taxInvoice.igst}),0)`,
+      grand: sql<string>`coalesce(sum(${taxInvoice.grandTotal}),0)`,
+    }).from(taxInvoice).where(and(notCancelled, sql`${taxInvoice.docDate} >= ${iso(fyStart)}`));
+
+    const num = (v: unknown) => Number(v ?? 0);
+    const fyLabel = `${String(fyStartYear % 100).padStart(2, '0')}-${String((fyStartYear + 1) % 100).padStart(2, '0')}`;
+
+    return {
+      fyLabel,
+      sales: {
+        week: week.v, lastWeek: lastWeek.v, month: month.v, lastMonth: lastMonth.v,
+        fy: fy.v, lastFy: lastFy.v, allTime: allTime.v,
+        invoiceCount: allTime.n, avgInvoice: allTime.n ? allTime.v / allTime.n : 0,
+      },
+      revByMonth, collectionsByMonth, newCustomersByMonth,
+      customers: num(customers?.n),
+      topCustomers: topCustomers.map((c) => ({ name: c.name, value: num(c.v) })),
+      aging,
+      ordersByStatus: ordersByStatus.map((o) => ({ status: o.status, n: num(o.n), value: num(o.v) })),
+      ordersByCategory: ordersByCategory.map((o) => ({ category: o.category, n: num(o.n), value: num(o.v) })),
+      quotesByStatus: quotesByStatus.map((o) => ({ status: o.status, n: num(o.n), value: num(o.v) })),
+      orderedQuotes: num(orderedQuotes?.n),
+      leadsByStage: leadsByStage.map((l) => ({ stage: l.stage, n: num(l.n), value: num(l.v) })),
+      leadsBySource: leadsBySource.map((l) => ({ source: l.source ?? '—', n: num(l.n) })),
+      gst: { taxable: num(gst?.taxable), cgst: num(gst?.cgst), sgst: num(gst?.sgst), igst: num(gst?.igst), grand: num(gst?.grand) },
+    };
+  });
+}
+
 export async function listOrders(q?: string, status?: string) {
   const u = await requireUser();
   const filters: SQL[] = [];

@@ -26,12 +26,14 @@ function getCtor(): RecognitionCtor | null {
  * (nvidia/nemotron-3.5-asr-streaming-0.6b) WebSocket without touching the panel.
  */
 export function MicButton({
-  onStart, onInterim, onText, disabled,
+  onStart, onInterim, onText, disabled, stopSignal,
 }: {
   onStart?: () => void;
   onInterim?: (text: string) => void;
   onText: (text: string) => void;
   disabled?: boolean;
+  /** Bump this to force-stop dictation (e.g. when the message is sent). */
+  stopSignal?: number;
 }) {
   const [supported, setSupported] = useState(false);
   const [listening, setListening] = useState(false);
@@ -41,6 +43,11 @@ export function MicButton({
 
   useEffect(() => { setSupported(!!getCtor()); }, []);
   useEffect(() => () => recRef.current?.abort(), []);
+
+  // Force-stop when the parent signals (e.g. the user hit Ask/Enter).
+  useEffect(() => {
+    if (recRef.current) { recRef.current.abort(); recRef.current = null; setListening(false); }
+  }, [stopSignal]);
 
   const stop = () => { recRef.current?.stop(); };
 

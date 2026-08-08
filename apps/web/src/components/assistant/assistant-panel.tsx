@@ -349,6 +349,7 @@ export function AssistantPanel({ enabled }: { enabled: boolean }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [input, setInput] = useState('');
+  const [micStop, setMicStop] = useState(0); // bump to force-stop voice dictation
   const dictationBase = useRef(''); // input text captured when voice dictation starts
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const abortRef = useRef<AbortController | null>(null);
@@ -385,6 +386,7 @@ export function AssistantPanel({ enabled }: { enabled: boolean }) {
   const send = useCallback(async (question: string, opts?: { hidden?: boolean }) => {
     const q = question.trim();
     if (!q || abortRef.current) return;
+    setMicStop((n) => n + 1); // stop any live voice dictation on send
     setInput('');
     setBusy(true);
 
@@ -678,6 +680,7 @@ export function AssistantPanel({ enabled }: { enabled: boolean }) {
             {enabled && (
               <MicButton
                 disabled={busy}
+                stopSignal={micStop}
                 onStart={() => { dictationBase.current = input.trim(); }}
                 onInterim={(t) => setInput((dictationBase.current ? dictationBase.current + ' ' : '') + t)}
                 onText={(t) => { const n = (dictationBase.current ? dictationBase.current + ' ' : '') + t; setInput(n); dictationBase.current = n; }}
