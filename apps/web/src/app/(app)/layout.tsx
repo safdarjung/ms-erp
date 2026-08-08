@@ -15,6 +15,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
       canManageUsers={user.permissions.has('user.manage')}
       canViewInbox={canViewInbox}
       canManageChannels={user.permissions.has('lead_channel.manage')}
+      canManageOutreach={user.permissions.has('settings.manage')}
       inboxCount={inboxCount}
     >
       {children}

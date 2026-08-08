@@ -1,5 +1,6 @@
 import { formatINRShort, LEAD_STAGES, LEAD_STAGE_LABELS } from '@ms/core';
-import { listLeads } from '@/lib/queries';
+import { listLeads, getOutreachSettings } from '@/lib/queries';
+import { buildWhatsappLink } from '@/lib/outreach';
 import { requireUser, can } from '@/lib/rbac';
 import Link from 'next/link';
 import { FilterBar } from '@/components/filter-bar';
@@ -18,6 +19,7 @@ export default async function LeadsPage({
   const { q, stage } = await searchParams;
   const user = await requireUser();
   const rows = await listLeads(q, stage);
+  const outreach = await getOutreachSettings();
   const canConvert = can(user, 'customer.create');
 
   return (
@@ -67,21 +69,31 @@ export default async function LeadsPage({
                     : <span className="capitalize">{l.stage}</span>}
                 </td>
                 <td className="text-right whitespace-nowrap">
-                  {l.convertedCustomerId ? (
-                    <span className="text-xs text-ok">✓ customer</span>
-                  ) : l.stage === 'won' && canConvert ? (
-                    <ConfirmButton
-                      action={convertLeadToCustomerAction}
-                      fields={{ id: l.id }}
-                      className="text-xs text-steel hover:underline"
-                      variant="primary"
-                      title="Convert lead to customer?"
-                      body={<>This creates a customer from <b>{l.customerName}</b> (or links to an existing one of the same name) so you can quote and invoice them.</>}
-                      confirmLabel="Make customer"
-                    >
-                      → Make customer
-                    </ConfirmButton>
-                  ) : null}
+                  <div className="flex items-center justify-end gap-3">
+                    {(() => {
+                      const wa = buildWhatsappLink({ phone: l.phone, name: l.contact || l.customerName, product: l.requirement, settings: outreach });
+                      return wa ? (
+                        <a href={wa} target="_blank" rel="noreferrer" className="text-xs font-medium text-[#128C7E] hover:underline" title="Send intro on WhatsApp">
+                          WhatsApp
+                        </a>
+                      ) : null;
+                    })()}
+                    {l.convertedCustomerId ? (
+                      <span className="text-xs text-ok">✓ customer</span>
+                    ) : l.stage === 'won' && canConvert ? (
+                      <ConfirmButton
+                        action={convertLeadToCustomerAction}
+                        fields={{ id: l.id }}
+                        className="text-xs text-steel hover:underline"
+                        variant="primary"
+                        title="Convert lead to customer?"
+                        body={<>This creates a customer from <b>{l.customerName}</b> (or links to an existing one of the same name) so you can quote and invoice them.</>}
+                        confirmLabel="Make customer"
+                      >
+                        → Make customer
+                      </ConfirmButton>
+                    ) : null}
+                  </div>
                 </td>
               </tr>
             ))}

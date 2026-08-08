@@ -8,6 +8,7 @@ import {
 } from '@ms/db';
 import { parseLetterhead, paymentStatus, type Letterhead } from '@ms/core';
 import { requireUser } from './rbac';
+import { DEFAULT_WHATSAPP_NUMBER, DEFAULT_INTRO, type OutreachSettings } from './outreach';
 
 const like = (q: string) => `%${q.trim()}%`;
 
@@ -81,6 +82,18 @@ export async function listLeadChannels() {
   return withTenant(u.tenantId, u.userId, (tx) =>
     tx.select().from(leadChannel).orderBy(desc(leadChannel.createdAt)),
   );
+}
+
+export async function getOutreachSettings(): Promise<OutreachSettings> {
+  const u = await requireUser();
+  const [t] = await withTenant(u.tenantId, u.userId, (tx) =>
+    tx.select({ settings: tenant.settings }).from(tenant).limit(1),
+  );
+  const s = (t?.settings ?? {}) as { outreach?: Partial<OutreachSettings> };
+  return {
+    whatsappNumber: s.outreach?.whatsappNumber || DEFAULT_WHATSAPP_NUMBER,
+    template: s.outreach?.template || DEFAULT_INTRO,
+  };
 }
 
 export async function getLead(id: string) {

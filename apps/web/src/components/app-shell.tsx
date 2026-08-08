@@ -17,6 +17,7 @@ function Icon({ name }: { name: string }) {
     users: <><circle cx="12" cy="8" r="4" /><path d="M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1" /><path d="M19 8h3M20.5 6.5v3" /></>,
     inbox: <><path d="M22 12h-6l-2 3h-4l-2-3H2" /><path d="M5.5 5.5 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.5-6.5A2 2 0 0 0 16.8 4H7.2a2 2 0 0 0-1.7 1.5z" /></>,
     channels: <><path d="M4 4h16v4H4z" /><path d="M4 10h10v4H4z" /><path d="M4 16h7v4H4z" /></>,
+    chat: <><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" /></>,
   };
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4 shrink-0" aria-hidden>
@@ -29,8 +30,8 @@ const TITLES: [string, string][] = [
   ['/dashboard', 'Dashboard'], ['/analytics', 'Analytics'],
   ['/leads/inbox', 'Lead inbox'], ['/leads', 'Leads'], ['/customers', 'Customers'],
   ['/quotations', 'Quotations'], ['/orders', 'Order book'], ['/invoices', 'Invoices'],
-  ['/settings/channels', 'Lead sources'], ['/settings/users', 'Users'],
-  ['/settings/password', 'Password'], ['/guide', 'Guide'],
+  ['/settings/channels', 'Lead sources'], ['/settings/outreach', 'WhatsApp outreach'],
+  ['/settings/users', 'Users'], ['/settings/password', 'Password'], ['/guide', 'Guide'],
 ];
 
 type NavItem = { href: string; label: string; icon: string; badge?: number };
@@ -41,6 +42,7 @@ export function AppShell({
   canManageUsers,
   canViewInbox,
   canManageChannels,
+  canManageOutreach,
   inboxCount,
   children,
 }: {
@@ -49,6 +51,7 @@ export function AppShell({
   canManageUsers: boolean;
   canViewInbox: boolean;
   canManageChannels: boolean;
+  canManageOutreach: boolean;
   inboxCount: number;
   children: ReactNode;
 }) {
@@ -62,6 +65,7 @@ export function AppShell({
   const adminItems: NavItem[] = [
     ...(canManageUsers ? [{ href: '/settings/users', label: 'Users & roles', icon: 'users' }] : []),
     ...(canManageChannels ? [{ href: '/settings/channels', label: 'Lead sources', icon: 'channels' }] : []),
+    ...(canManageOutreach ? [{ href: '/settings/outreach', label: 'WhatsApp outreach', icon: 'chat' }] : []),
   ];
 
   const nav: { group: string; items: NavItem[] }[] = [

@@ -1,6 +1,25 @@
 // Shared shapes for the inbound lead-capture pipeline. Kept free of `server-only`
 // so route handlers, the pipeline and (later) tests can all import the types.
 
+/** An attachment as it arrives in the webhook payload (base64 content). */
+export type IncomingAttachment = {
+  name: string;
+  mimeType?: string | null;
+  size?: number | null;
+  /** base64-encoded file content. */
+  dataBase64: string;
+};
+
+/** An attachment after it's been stored in Supabase Storage. */
+export type StoredAttachment = {
+  name: string;
+  mimeType: string;
+  size: number;
+  /** Object path within the bucket, e.g. `<tenantId>/<inboundId>/<file>`; null if storage was unavailable. */
+  path: string | null;
+  error?: string;
+};
+
 /** A normalized inbound email, provider-agnostic (see providers.ts). */
 export type InboundEmail = {
   /** Idempotency key — the RFC Message-ID (or a hash fallback). */
@@ -16,6 +35,8 @@ export type InboundEmail = {
   toAddress?: string | null;
   /** Provider-supplied spam score, if any (higher = spammier). */
   spamScore?: number | null;
+  /** File attachments (base64) to be stored on ingest. */
+  attachments?: IncomingAttachment[];
 };
 
 /** Fields extracted from a message, ready to become a `lead`. */

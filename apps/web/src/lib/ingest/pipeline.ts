@@ -1,10 +1,11 @@
 import 'server-only';
 import { withTenant, inboundMessage, lead, auditLog, eq, or, sql, type Tx } from '@ms/db';
 import { createLeadRecord } from '../documents';
-import type { Channel, InboundEmail, ExtractedLead, IngestOutcome } from './types';
+import type { Channel, InboundEmail, ExtractedLead, IngestOutcome, StoredAttachment } from './types';
 import { parseMarketplaceEmail } from './parse-marketplace';
 import { isBulk } from './spam';
 import { normalizeEmail, normalizePhone } from './dedupe';
+import { uploadAttachment, storageConfigured } from './storage';
 
 // Inbound writes have no session user. RLS keys only on `app.current_tenant`, so
 // a stable sentinel satisfies the GUC; audit rows are left userId=null (= system).
@@ -26,6 +27,25 @@ function bestEffortDraft(email: InboundEmail): ExtractedLead {
   };
 }
 
+/** Upload each attachment to Supabase Storage (best-effort); returns stored metadata. */
+async function storeAttachments(tenantId: string, email: InboundEmail): Promise<StoredAttachment[]> {
+  if (!email.attachments?.length) return [];
+  const folder = (email.externalId || 'msg').replace(/[^\w.\-]+/g, '_').slice(0, 60) || 'msg';
+  const out: StoredAttachment[] = [];
+  for (const a of email.attachments.slice(0, 10)) {
+    const mimeType = a.mimeType || 'application/octet-stream';
+    let bytes: Buffer;
+    try { bytes = Buffer.from(a.dataBase64, 'base64'); } catch { continue; }
+    try {
+      const path = storageConfigured() ? await uploadAttachment(tenantId, folder, a.name, mimeType, bytes) : null;
+      out.push({ name: a.name, mimeType, size: a.size ?? bytes.length, path, ...(path ? {} : { error: 'storage not configured' }) });
+    } catch (e) {
+      out.push({ name: a.name, mimeType, size: a.size ?? bytes.length, path: null, error: (e as Error).message.slice(0, 120) });
+    }
+  }
+  return out;
+}
+
 /** Find an existing lead matching this draft by normalized email or phone (last-10). */
 async function findDuplicateLead(tx: Tx, draft: ExtractedLead): Promise<string | null> {
   const email = normalizeEmail(draft.email);
@@ -45,6 +65,8 @@ async function findDuplicateLead(tx: Tx, draft: ExtractedLead): Promise<string |
  */
 export async function ingestEmail(channel: Channel, email: InboundEmail): Promise<IngestOutcome> {
   const tenantId = channel.tenantId;
+  // Upload attachments first (outside the DB tx) so no connection is held during network I/O.
+  const attachments = await storeAttachments(tenantId, email);
   return withTenant(tenantId, SYSTEM_USER_ID, async (tx) => {
     // 1. idempotent insert
     const inserted = await tx.insert(inboundMessage).values({
@@ -60,6 +82,7 @@ export async function ingestEmail(channel: Channel, email: InboundEmail): Promis
       rawHeaders: email.headers ?? null,
       receivedAt: email.receivedAt ?? new Date(),
       status: 'pending',
+      attachments: attachments.length ? attachments : null,
     }).onConflictDoNothing().returning({ id: inboundMessage.id });
 
     const inboundId = inserted[0]?.id;

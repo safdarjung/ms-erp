@@ -18,6 +18,7 @@ export type InboxMessage = {
   parseMethod: string;
   dedupeReason: string | null;
   leadId: string | null;
+  attachments: { name: string; mimeType: string; size: number; url: string | null }[];
   prefill: {
     customerName: string;
     contact: string;
@@ -64,6 +65,38 @@ export function InboxRow({ message: m, canManage }: { message: InboxMessage; can
           ) : null}
         </div>
       </div>
+
+      {m.attachments.length > 0 && (
+        <div className="mt-3">
+          <div className="text-[0.7rem] uppercase tracking-wide text-faint mb-1.5">
+            Attachments ({m.attachments.length})
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {m.attachments.map((a, i) =>
+              a.mimeType.startsWith('image/') && a.url ? (
+                <a key={i} href={a.url} target="_blank" rel="noreferrer" title={a.name}>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={a.url} alt={a.name} className="h-20 w-20 object-cover rounded border border-line" />
+                </a>
+              ) : (
+                <a
+                  key={i}
+                  href={a.url ?? undefined}
+                  target={a.url ? '_blank' : undefined}
+                  rel="noreferrer"
+                  className={`text-xs inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded border border-line ${
+                    a.url ? 'bg-surface-2 hover:bg-surface text-ink' : 'bg-surface-2 text-faint cursor-default'
+                  }`}
+                >
+                  📎 <span className="max-w-[12rem] truncate">{a.name}</span>
+                  {a.size ? <span className="text-faint">· {Math.round(a.size / 1024)} KB</span> : null}
+                  {!a.url && <span className="text-faint">(unavailable)</span>}
+                </a>
+              ),
+            )}
+          </div>
+        </div>
+      )}
 
       {m.status === 'pending' && canManage && (
         <details className="reveal mt-3 border-t border-line pt-3">

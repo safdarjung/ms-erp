@@ -5,7 +5,8 @@ import { listInboundMessages, inboxPendingCount } from '@/lib/queries';
 import { formatDate } from '@/lib/format';
 import { FilterBar } from '@/components/filter-bar';
 import { InboxRow, type InboxMessage } from './inbox-row';
-import type { ExtractedLead } from '@/lib/ingest/types';
+import { signedUrl } from '@/lib/ingest/storage';
+import type { ExtractedLead, StoredAttachment } from '@/lib/ingest/types';
 
 export const metadata = { title: 'Lead inbox' };
 
@@ -30,9 +31,16 @@ export default async function LeadInboxPage({
   const canManage = can(user, 'lead_inbox.manage');
   const canManageChannels = can(user, 'lead_channel.manage');
 
-  const messages: InboxMessage[] = rows.map((r) => {
+  const messages: InboxMessage[] = await Promise.all(rows.map(async (r) => {
     const p = (r.parsed ?? {}) as Partial<ExtractedLead>;
     const source = p.source ?? (r.channelKind === 'email_webhook' ? 'Email' : r.channelKind);
+    const atts = Array.isArray(r.attachments) ? (r.attachments as StoredAttachment[]) : [];
+    const attachments = await Promise.all(atts.map(async (a) => ({
+      name: a.name,
+      mimeType: a.mimeType,
+      size: a.size,
+      url: a.path ? await signedUrl(a.path) : null,
+    })));
     return {
       id: r.id,
       status: r.status,
@@ -44,6 +52,7 @@ export default async function LeadInboxPage({
       parseMethod: r.parseMethod,
       dedupeReason: r.dedupeReason,
       leadId: r.leadId,
+      attachments,
       prefill: {
         customerName: p.customerName ?? r.fromName ?? r.subject ?? '',
         contact: p.contact ?? r.fromName ?? '',
@@ -53,7 +62,7 @@ export default async function LeadInboxPage({
         source,
       },
     };
-  });
+  }));
 
   return (
     <div className="max-w-4xl">
