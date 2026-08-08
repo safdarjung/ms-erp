@@ -26,7 +26,7 @@ function Icon({ name }: { name: string }) {
 const TITLES: [string, string][] = [
   ['/dashboard', 'Dashboard'], ['/analytics', 'Analytics'], ['/leads', 'Leads'], ['/customers', 'Customers'],
   ['/quotations', 'Quotations'], ['/orders', 'Order book'], ['/invoices', 'Invoices'],
-  ['/settings/users', 'Users'], ['/settings/password', 'Password'],
+  ['/settings/users', 'Users'], ['/settings/password', 'Password'], ['/guide', 'Guide'],
 ];
 
 export function AppShell({
@@ -136,6 +136,7 @@ export function AppShell({
           <div className="font-medium text-ink truncate">{user.name}</div>
           <div className="text-faint truncate mb-2">{user.email}</div>
           <div className="flex items-center gap-3">
+            <Link href="/guide" className="text-steel hover:underline">Guide</Link>
             <Link href="/settings/password" className="text-steel hover:underline">Change password</Link>
             <form action={logoutAction}>
               <button type="submit" className="text-steel hover:underline">Log out</button>
@@ -160,11 +161,11 @@ export function AppShell({
           </div>
           <button
             onClick={() => openAssistant()}
-            className="flex items-center gap-2 text-xs text-muted hover:text-accent transition-colors shrink-0"
+            className="flex items-center gap-2 text-xs font-medium text-accent border border-accent/40 bg-accent-soft/50 hover:bg-accent-soft rounded-lg px-3 py-1.5 transition-colors shrink-0"
             title="Ask AI (⌘K)"
           >
-            <span className="text-accent" aria-hidden>✦</span>
-            <span className="hidden sm:inline">Ask AI</span>
+            <span aria-hidden>✦</span>
+            <span>Ask AI</span>
             <kbd className="kbd hidden sm:inline-block">⌘K</kbd>
           </button>
         </header>

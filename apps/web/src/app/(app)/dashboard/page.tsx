@@ -5,7 +5,7 @@ import { formatINR, formatINRShort, LEAD_STAGES, LEAD_STAGE_LABELS } from '@ms/c
 import { requireUser } from '@/lib/rbac';
 import { dashboardData } from '@/lib/queries';
 import { formatDate } from '@/lib/format';
-import { AskCard } from './ask-card';
+import { AskCard, AskAiButton } from './ask-card';
 
 export const metadata = { title: 'Dashboard' };
 
@@ -80,15 +80,18 @@ export default async function DashboardPage() {
   return (
     <div className="max-w-6xl">
       <p className="eyebrow">Dashboard</p>
-      <div className="flex flex-wrap items-end justify-between gap-3 mb-6">
+      <div className="flex flex-wrap items-end justify-between gap-3 mb-2">
         <h1 className="text-2xl font-semibold tracking-tight">{greeting()}, {firstName} 👋</h1>
         <div className="flex flex-wrap gap-2">
-          <Link href="/quotations/new" className="btn-primary text-xs">+ Quotation</Link>
+          <AskAiButton className="text-xs" />
+          <Link href="/quotations/new" className="btn-ghost text-xs">+ Quotation</Link>
           <Link href="/orders/new" className="btn-ghost text-xs">+ Order</Link>
           <Link href="/invoices/new" className="btn-ghost text-xs">+ Invoice</Link>
-          <Link href="/leads" className="btn-ghost text-xs">+ Lead</Link>
         </div>
       </div>
+      <p className="text-sm text-muted mb-6">
+        New here? <Link href="/guide" className="text-accent hover:underline font-medium">Take the quick tour →</Link>
+      </p>
 
       {(d.overdue > 0.5 || d.followupsDue > 0) && (
         <div className="flex flex-wrap gap-3 mb-6">
