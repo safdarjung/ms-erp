@@ -14,6 +14,7 @@ const TENANT_TABLES = [
   'session', 'audit_log', 'customer', 'lead', 'lead_activity',
   'doc_sequence', 'quotation', 'quotation_item', 'sales_order',
   'order_item', 'tax_invoice', 'tax_invoice_item', 'payment', 'ai_usage', 'ai_action',
+  'lead_channel', 'inbound_message',
 ];
 
 async function main() {

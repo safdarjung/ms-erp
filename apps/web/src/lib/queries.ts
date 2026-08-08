@@ -3,7 +3,7 @@ import type { SQL } from 'drizzle-orm';
 import {
   withTenant, customer, lead, leadActivity, quotation, quotationItem, salesOrder, orderItem,
   taxInvoice, taxInvoiceItem, payment, tenant,
-  users, role, userRole,
+  users, role, userRole, inboundMessage, leadChannel,
   count, sql, desc, eq, or, ilike, and,
 } from '@ms/db';
 import { parseLetterhead, paymentStatus, type Letterhead } from '@ms/core';
@@ -38,6 +38,48 @@ export async function listLeads(q?: string, stage?: string) {
     tx.select().from(lead)
       .where(filters.length ? and(...filters) : undefined)
       .orderBy(desc(lead.createdAt)),
+  );
+}
+
+export async function listInboundMessages(status?: string, q?: string) {
+  const u = await requireUser();
+  const filters: SQL[] = [];
+  if (status?.trim()) filters.push(eq(inboundMessage.status, status));
+  if (q?.trim()) {
+    filters.push(or(
+      ilike(inboundMessage.subject, like(q)),
+      ilike(inboundMessage.fromEmail, like(q)),
+      ilike(inboundMessage.fromName, like(q)),
+    )!);
+  }
+  return withTenant(u.tenantId, u.userId, (tx) =>
+    tx.select().from(inboundMessage)
+      .where(filters.length ? and(...filters) : undefined)
+      .orderBy(desc(inboundMessage.receivedAt))
+      .limit(200),
+  );
+}
+
+export async function getInboundMessage(id: string) {
+  const u = await requireUser();
+  const [row] = await withTenant(u.tenantId, u.userId, (tx) =>
+    tx.select().from(inboundMessage).where(eq(inboundMessage.id, id)).limit(1),
+  );
+  return row ?? null;
+}
+
+export async function inboxPendingCount(): Promise<number> {
+  const u = await requireUser();
+  const [row] = await withTenant(u.tenantId, u.userId, (tx) =>
+    tx.select({ n: count() }).from(inboundMessage).where(eq(inboundMessage.status, 'pending')),
+  );
+  return Number(row?.n ?? 0);
+}
+
+export async function listLeadChannels() {
+  const u = await requireUser();
+  return withTenant(u.tenantId, u.userId, (tx) =>
+    tx.select().from(leadChannel).orderBy(desc(leadChannel.createdAt)),
   );
 }
 

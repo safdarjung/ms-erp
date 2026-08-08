@@ -4,6 +4,7 @@
 export const PERMISSIONS = [
   'dashboard.view',
   'lead.view', 'lead.create', 'lead.edit', 'lead.delete',
+  'lead_inbox.view', 'lead_inbox.manage', 'lead_channel.manage',
   'customer.view', 'customer.create', 'customer.edit', 'customer.delete',
   'quotation.view', 'quotation.create', 'quotation.edit',
   'order.view', 'order.create', 'order.edit',
@@ -22,6 +23,7 @@ export const ROLE_PERMISSIONS: Record<RoleName, Permission[] | '*'> = {
   sales: [
     'dashboard.view',
     'lead.view', 'lead.create', 'lead.edit', 'lead.delete',
+    'lead_inbox.view', 'lead_inbox.manage',
     'customer.view', 'customer.create', 'customer.edit',
     'quotation.view', 'quotation.create', 'quotation.edit',
     'order.view', 'order.create',

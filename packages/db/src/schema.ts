@@ -138,10 +138,16 @@ export const lead = pgTable('lead', {
   valueEstimate: numeric('value_estimate', { precision: 14, scale: 2 }),
   nextFollowupAt: timestamp('next_followup_at', { withTimezone: true }),
   convertedCustomerId: uuid('converted_customer_id'),
+  // Origin trace when a lead was auto-created from an inbound_message (email/marketplace).
+  inboundMessageId: uuid('inbound_message_id'),
   ...ts(),
 }, (t) => ({
   tenantIdx: index('lead_tenant_idx').on(t.tenantId),
   stageIdx: index('lead_stage_idx').on(t.tenantId, t.stage),
+  // One lead per inbound message (backstop against double-create races); partial
+  // so hand-entered leads (null) are unconstrained.
+  inboundUq: uniqueIndex('lead_inbound_message_uq').on(t.tenantId, t.inboundMessageId)
+    .where(sql`inbound_message_id is not null`),
 }));
 
 export const leadActivity = pgTable('lead_activity', {
@@ -332,3 +338,56 @@ export const taxInvoiceItem = pgTable('tax_invoice_item', {
   gstRate: numeric('gst_rate', { precision: 5, scale: 2 }).notNull().default('18'),
   taxableValue: numeric('taxable_value', { precision: 14, scale: 2 }).notNull().default('0'),
 }, (t) => ({ iIdx: index('tax_invoice_item_i_idx').on(t.invoiceId) }));
+
+// ── Inbound lead capture (email → Lead Inbox) ───────────────────────────────
+
+// A per-tenant lead source. Phase-1 ships `email_webhook` (a mail-forwarding
+// provider POSTs parsed enquiries to /api/leads/inbound). `imap`, `indiamart`
+// and `tradeindia` are reserved for later phases (they add a `secret` column).
+export const leadChannel = pgTable('lead_channel', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id').notNull(),
+  kind: varchar('kind', { length: 20 }).notNull().default('email_webhook'),
+  name: text('name').notNull(),
+  enabled: boolean('enabled').notNull().default(true),
+  // Non-secret config: { inboundToken, defaultOwnerUserId, senderAllowlist[], autoCreate }.
+  // `inboundToken` routes the capture address (leads+<token>@…) back to this tenant.
+  config: jsonb('config').notNull().default(sql`'{}'::jsonb`),
+  lastSeenAt: timestamp('last_seen_at', { withTimezone: true }),
+  ...ts(),
+}, (t) => ({
+  tenantIdx: index('lead_channel_tenant_idx').on(t.tenantId),
+  nameUq: uniqueIndex('lead_channel_name_uq').on(t.tenantId, t.kind, t.name),
+}));
+
+// Raw + parsed record of every inbound enquiry. `externalId` (the email
+// Message-ID or a marketplace lead id) makes ingestion idempotent; `status`
+// drives the Lead Inbox triage queue.
+export const inboundMessage = pgTable('inbound_message', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id').notNull(),
+  channelId: uuid('channel_id'),
+  channelKind: varchar('channel_kind', { length: 20 }).notNull().default('email_webhook'),
+  externalId: varchar('external_id', { length: 255 }).notNull(),
+  fromName: text('from_name'),
+  fromEmail: varchar('from_email', { length: 255 }),
+  fromPhone: varchar('from_phone', { length: 40 }),
+  subject: text('subject'),
+  bodyText: text('body_text'),
+  bodyHtml: text('body_html'),
+  rawHeaders: jsonb('raw_headers'),
+  receivedAt: timestamp('received_at', { withTimezone: true }).notNull().defaultNow(),
+  // pending | converted | ignored | spam | duplicate | failed
+  status: varchar('status', { length: 12 }).notNull().default('pending'),
+  parseMethod: varchar('parse_method', { length: 10 }).notNull().default('none'), // template | ai | none
+  parsed: jsonb('parsed'),
+  confidence: numeric('confidence', { precision: 4, scale: 3 }),
+  attachments: jsonb('attachments'),
+  leadId: uuid('lead_id'),
+  dedupeReason: text('dedupe_reason'),
+  error: text('error'),
+  ...ts(),
+}, (t) => ({
+  externalUq: uniqueIndex('inbound_message_external_uq').on(t.tenantId, t.channelKind, t.externalId),
+  statusIdx: index('inbound_message_status_idx').on(t.tenantId, t.status),
+}));

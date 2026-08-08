@@ -1,10 +1,10 @@
 import 'server-only';
 import {
   computeGst, isInterstate, parseLetterhead,
-  type InvoiceInput, type QuotationInput, type OrderInput, type PaymentInput,
+  type InvoiceInput, type QuotationInput, type OrderInput, type PaymentInput, type LeadStage,
 } from '@ms/core';
 import {
-  customer, quotation, quotationItem, salesOrder, orderItem, taxInvoice, taxInvoiceItem, payment,
+  customer, lead, quotation, quotationItem, salesOrder, orderItem, taxInvoice, taxInvoiceItem, payment,
   tenant, issueDocNumber, eq, sum, type Tx,
 } from '@ms/db';
 
@@ -20,6 +20,43 @@ export async function getSupplierStateCode(tx: Tx): Promise<string> {
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const addDays = (d: Date, days: number) => new Date(d.getTime() + days * 86_400_000);
+
+// One validated lead insert, shared by the manual form action, the AI agent's
+// `create_lead` executor and the inbound-capture pipeline so they never drift.
+// Callers validate their own input (zod) and pass already-clean fields.
+export type CreateLeadFields = {
+  customerName: string;
+  contact?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  source?: string | null;
+  requirement?: string | null;
+  stage?: LeadStage;
+  valueEstimate?: number | null;
+  nextFollowupAt?: string | Date | null;
+  ownerUserId?: string | null;
+  inboundMessageId?: string | null;
+};
+
+export async function createLeadRecord(
+  tx: Tx, tenantId: string, d: CreateLeadFields,
+): Promise<{ id: string }> {
+  const [l] = await tx.insert(lead).values({
+    tenantId,
+    customerName: d.customerName,
+    contact: d.contact ?? undefined,
+    phone: d.phone ?? undefined,
+    email: d.email ?? undefined,
+    source: d.source ?? undefined,
+    requirement: d.requirement ?? undefined,
+    stage: d.stage ?? 'new',
+    ownerUserId: d.ownerUserId ?? undefined,
+    valueEstimate: d.valueEstimate != null ? String(d.valueEstimate) : undefined,
+    nextFollowupAt: d.nextFollowupAt ? new Date(d.nextFollowupAt) : undefined,
+    inboundMessageId: d.inboundMessageId ?? undefined,
+  }).returning({ id: lead.id });
+  return { id: l!.id };
+}
 
 export async function insertQuotationTx(
   tx: Tx, u: U, d: QuotationInput,

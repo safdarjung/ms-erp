@@ -43,6 +43,13 @@
       "when": 1786116751640,
       "tag": "0005_loving_puff_adder",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1786176143985,
+      "tag": "0006_nostalgic_guardsmen",
+      "breakpoints": true
     }
   ]
 }

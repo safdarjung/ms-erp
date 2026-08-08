@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache';
 import { leadInput, LEAD_STAGES, LEAD_ACTIVITY_TYPES } from '@ms/core';
 import { withTenant, lead, leadActivity, customer, eq, ilike } from '@ms/db';
 import { requirePermission } from '@/lib/rbac';
+import { createLeadRecord } from '@/lib/documents';
 import { toActionError, type ActionResult } from '@/lib/forms';
 
 export type ActionState = { error?: string; ok?: boolean };
@@ -15,18 +16,7 @@ export async function createLeadAction(_prev: ActionState, formData: FormData): 
 
   const d = parsed.data;
   await withTenant(u.tenantId, u.userId, (tx) =>
-    tx.insert(lead).values({
-      tenantId: u.tenantId,
-      customerName: d.customerName,
-      contact: d.contact,
-      phone: d.phone,
-      email: d.email,
-      source: d.source,
-      requirement: d.requirement,
-      stage: d.stage,
-      ownerUserId: u.userId,
-      valueEstimate: d.valueEstimate != null ? String(d.valueEstimate) : undefined,
-    }),
+    createLeadRecord(tx, u.tenantId, { ...d, ownerUserId: u.userId }),
   );
   revalidatePath('/leads');
   return { ok: true };

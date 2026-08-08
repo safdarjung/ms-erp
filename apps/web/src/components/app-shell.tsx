@@ -15,6 +15,8 @@ function Icon({ name }: { name: string }) {
     orders: <><path d="M3.3 7l8.7 5 8.7-5" /><path d="M12 22V12" /><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" /></>,
     invoices: <><path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1z" /><path d="M9 8h6M9 12h6M9 16h4" /></>,
     users: <><circle cx="12" cy="8" r="4" /><path d="M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1" /><path d="M19 8h3M20.5 6.5v3" /></>,
+    inbox: <><path d="M22 12h-6l-2 3h-4l-2-3H2" /><path d="M5.5 5.5 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.5-6.5A2 2 0 0 0 16.8 4H7.2a2 2 0 0 0-1.7 1.5z" /></>,
+    channels: <><path d="M4 4h16v4H4z" /><path d="M4 10h10v4H4z" /><path d="M4 16h7v4H4z" /></>,
   };
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4 shrink-0" aria-hidden>
@@ -24,30 +26,45 @@ function Icon({ name }: { name: string }) {
 }
 
 const TITLES: [string, string][] = [
-  ['/dashboard', 'Dashboard'], ['/analytics', 'Analytics'], ['/leads', 'Leads'], ['/customers', 'Customers'],
+  ['/dashboard', 'Dashboard'], ['/analytics', 'Analytics'],
+  ['/leads/inbox', 'Lead inbox'], ['/leads', 'Leads'], ['/customers', 'Customers'],
   ['/quotations', 'Quotations'], ['/orders', 'Order book'], ['/invoices', 'Invoices'],
-  ['/settings/users', 'Users'], ['/settings/password', 'Password'], ['/guide', 'Guide'],
+  ['/settings/channels', 'Lead sources'], ['/settings/users', 'Users'],
+  ['/settings/password', 'Password'], ['/guide', 'Guide'],
 ];
+
+type NavItem = { href: string; label: string; icon: string; badge?: number };
 
 export function AppShell({
   user,
   aiEnabled,
   canManageUsers,
+  canViewInbox,
+  canManageChannels,
+  inboxCount,
   children,
 }: {
   user: { name: string; email: string };
   aiEnabled: boolean;
   canManageUsers: boolean;
+  canViewInbox: boolean;
+  canManageChannels: boolean;
+  inboxCount: number;
   children: ReactNode;
 }) {
   const pathname = usePathname();
   const [navOpen, setNavOpen] = useState(false);
-  const title = TITLES.find(([p]) => pathname.startsWith(p))?.[1] ?? 'MS ERP';
+  const title = TITLES.find(([p]) => pathname === p || pathname.startsWith(p + '/'))?.[1] ?? 'MS ERP';
 
   // Route change closes the mobile drawer.
   useEffect(() => setNavOpen(false), [pathname]);
 
-  const nav: { group: string; items: { href: string; label: string; icon: string }[] }[] = [
+  const adminItems: NavItem[] = [
+    ...(canManageUsers ? [{ href: '/settings/users', label: 'Users & roles', icon: 'users' }] : []),
+    ...(canManageChannels ? [{ href: '/settings/channels', label: 'Lead sources', icon: 'channels' }] : []),
+  ];
+
+  const nav: { group: string; items: NavItem[] }[] = [
     {
       group: 'Overview',
       items: [
@@ -59,6 +76,7 @@ export function AppShell({
       group: 'CRM',
       items: [
         { href: '/leads', label: 'Leads', icon: 'leads' },
+        ...(canViewInbox ? [{ href: '/leads/inbox', label: 'Lead inbox', icon: 'inbox', badge: inboxCount }] : []),
         { href: '/customers', label: 'Customers', icon: 'customers' },
       ],
     },
@@ -70,10 +88,14 @@ export function AppShell({
         { href: '/invoices', label: 'Invoices', icon: 'invoices' },
       ],
     },
-    ...(canManageUsers
-      ? [{ group: 'Admin', items: [{ href: '/settings/users', label: 'Users & roles', icon: 'users' }] }]
-      : []),
+    ...(adminItems.length ? [{ group: 'Admin', items: adminItems }] : []),
   ];
+
+  // Highlight only the most specific matching item (so /leads doesn't also light
+  // up when you're on /leads/inbox).
+  const activeHref = nav.flatMap((g) => g.items)
+    .filter((n) => pathname === n.href || pathname.startsWith(n.href + '/'))
+    .sort((a, b) => b.href.length - a.href.length)[0]?.href;
 
   return (
     <div className="min-h-dvh md:grid md:grid-cols-[228px_1fr]">
@@ -113,7 +135,7 @@ export function AppShell({
               <div className="px-3 pt-1 pb-1.5 text-[0.62rem] font-mono uppercase tracking-[0.14em] text-faint">{g.group}</div>
               <div className="flex flex-col gap-0.5">
                 {g.items.map((n) => {
-                  const active = pathname === n.href || pathname.startsWith(n.href + '/');
+                  const active = n.href === activeHref;
                   return (
                     <Link
                       key={n.href}
@@ -123,7 +145,12 @@ export function AppShell({
                       }`}
                     >
                       <Icon name={n.icon} />
-                      {n.label}
+                      <span className="flex-1">{n.label}</span>
+                      {n.badge ? (
+                        <span className="min-w-[1.25rem] px-1.5 py-0.5 rounded-full bg-accent text-white text-[0.65rem] font-semibold text-center leading-none">
+                          {n.badge > 99 ? '99+' : n.badge}
+                        </span>
+                      ) : null}
                     </Link>
                   );
                 })}

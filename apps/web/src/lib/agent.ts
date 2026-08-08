@@ -18,7 +18,7 @@ import {
   convertQuotationTx, convertQuotationToOrderTx, convertOrderToInvoiceTx,
   recordPaymentTx, deletePaymentTx, insertOrderTx,
   getSupplierStateCode, insertInvoiceTx, insertQuotationTx,
-  updateInvoiceTx, updateQuotationTx,
+  updateInvoiceTx, updateQuotationTx, createLeadRecord,
 } from './documents';
 
 // The AI agent's write path (docs/05 §5 human-in-the-loop). `stageAction`
@@ -621,16 +621,10 @@ async function performAction(tx: Tx, u: U, kind: string, payload: unknown): Prom
     }
     case 'create_lead': {
       const d = createLeadInput.parse(payload);
-      const [l] = await tx.insert(lead).values({
-        tenantId: u.tenantId, customerName: d.customerName, contact: d.contact, phone: d.phone,
-        email: d.email, source: d.source, requirement: d.requirement, stage: d.stage,
-        ownerUserId: u.userId,
-        valueEstimate: d.valueEstimate != null ? String(d.valueEstimate) : undefined,
-        nextFollowupAt: d.nextFollowupAt ? new Date(d.nextFollowupAt) : undefined,
-      }).returning({ id: lead.id });
+      const l = await createLeadRecord(tx, u.tenantId, { ...d, ownerUserId: u.userId });
       return {
         message: `Lead “${d.customerName}” recorded${d.stage !== 'new' ? ` (stage: ${d.stage})` : ''}.`,
-        entity: { type: 'lead', id: l!.id }, path: '/leads',
+        entity: { type: 'lead', id: l.id }, path: '/leads',
         revalidate: ['/leads', '/dashboard'],
       };
     }
