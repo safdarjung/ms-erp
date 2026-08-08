@@ -67,6 +67,7 @@ export async function logout(): Promise<void> {
 export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
   const token = await getSessionToken();
   if (!token) return null;
+  const tokenHashed = hashToken(token);
 
   const rows = await adminDb
     .select({
@@ -75,11 +76,18 @@ export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
     })
     .from(session)
     .innerJoin(users, eq(session.userId, users.id))
-    .where(eq(session.tokenHash, hashToken(token)))
+    .where(eq(session.tokenHash, tokenHashed))
     .limit(1);
 
   const row = rows[0];
   if (!row || row.expiresAt.getTime() < Date.now()) return null;
+
+  // Rolling session — extend the DB expiry when >1 day has passed since the last
+  // bump, so continuous use never forces a re-login (the cookie rolls in middleware).
+  const fullMs = SESSION_TTL_DAYS * 86_400_000;
+  if (row.expiresAt.getTime() - Date.now() < fullMs - 86_400_000) {
+    await adminDb.update(session).set({ expiresAt: new Date(Date.now() + fullMs) }).where(eq(session.tokenHash, tokenHashed));
+  }
 
   const permissions = await getPermissions(row.tenantId, row.userId);
   return { userId: row.userId, tenantId: row.tenantId, name: row.name, email: row.email, permissions };
