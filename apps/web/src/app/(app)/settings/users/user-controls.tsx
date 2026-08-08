@@ -3,8 +3,25 @@ import { useActionState, useEffect, useRef } from 'react';
 import { ROLES } from '@ms/core';
 import { SubmitButton } from '@/components/submit-button';
 import {
-  createUserAction, resetPasswordAction, setUserRoleAction, setUserStatusAction, type ActionState,
+  createUserAction, resetPasswordAction, setUserRoleAction, setUserStatusAction, updateUserProfileAction, type ActionState,
 } from './actions';
+
+export function EditProfile({ id, name, email }: { id: string; name: string; email: string }) {
+  const [state, action] = useActionState<ActionState, FormData>(updateUserProfileAction, {});
+  return (
+    <details className="reveal">
+      <summary className="text-xs text-steel hover:underline cursor-pointer">Edit name / email</summary>
+      <form action={action} className="flex flex-wrap items-center gap-2 mt-1.5">
+        <input type="hidden" name="id" value={id} />
+        <input name="name" defaultValue={name} required className="field !py-1 text-xs w-36" placeholder="Name" />
+        <input name="email" type="email" defaultValue={email} required className="field !py-1 text-xs w-52" placeholder="name@company.com" />
+        <SubmitButton className="btn-ghost !py-1 text-xs">Save</SubmitButton>
+        {state.error && <span className="text-xs text-crit">{state.error}</span>}
+        {state.ok && <span className="text-xs text-ok">Saved ✓</span>}
+      </form>
+    </details>
+  );
+}
 
 export function CreateUserForm() {
   const [state, action] = useActionState<ActionState, FormData>(createUserAction, {});

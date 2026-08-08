@@ -40,6 +40,31 @@ export async function createUserAction(_prev: ActionState, formData: FormData): 
   return { ok: true };
 }
 
+const profileInput = z.object({
+  id: z.string().uuid(),
+  name: z.string().trim().min(1, 'Name is required').max(200),
+  email: z.string().trim().toLowerCase().email('Enter a valid email'),
+});
+
+/** Edit a user's real name & email (e.g. to set the owner's real login on handover). */
+export async function updateUserProfileAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
+  const u = await requirePermission('user.manage');
+  const parsed = profileInput.safeParse(Object.fromEntries(formData));
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? 'Invalid input' };
+  const d = parsed.data;
+  try {
+    await withTenant(u.tenantId, u.userId, (tx) =>
+      tx.update(users).set({ name: d.name, email: d.email, updatedAt: new Date() }).where(eq(users.id, d.id)),
+    );
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : '';
+    if (/users_email_uq|duplicate key/i.test(msg)) return { error: 'That email is already used by another user.' };
+    return { error: msg || 'Could not update the user' };
+  }
+  revalidatePath('/settings/users');
+  return { ok: true };
+}
+
 export async function setUserStatusAction(formData: FormData): Promise<void> {
   const u = await requirePermission('user.manage');
   const id = String(formData.get('id') ?? '');

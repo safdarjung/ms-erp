@@ -2,7 +2,7 @@ import { redirect } from 'next/navigation';
 import { listUsersWithRoles } from '@/lib/queries';
 import { requireUser, can } from '@/lib/rbac';
 import { formatDate } from '@/lib/format';
-import { CreateUserForm, ResetPassword, RoleSelect, StatusToggle } from './user-controls';
+import { CreateUserForm, EditProfile, ResetPassword, RoleSelect, StatusToggle } from './user-controls';
 
 export const metadata = { title: 'Users' };
 
@@ -42,7 +42,12 @@ export default async function UsersPage() {
                   <td><RoleSelect id={u.id} current={u.roles[0] ?? ''} disabled={self} /></td>
                   <td><StatusToggle id={u.id} status={u.status} disabled={self} /></td>
                   <td className="text-xs text-muted">{u.lastLoginAt ? formatDate(u.lastLoginAt) : 'never'}</td>
-                  <td className="text-right"><ResetPassword id={u.id} /></td>
+                  <td className="text-right">
+                    <div className="flex flex-col items-end gap-1">
+                      <EditProfile id={u.id} name={u.name} email={u.email} />
+                      <ResetPassword id={u.id} />
+                    </div>
+                  </td>
                 </tr>
               );
             })}
