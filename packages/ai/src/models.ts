@@ -12,7 +12,7 @@ export const AI_MODELS = {
   classify: 'claude-haiku-4-5',
 } as const;
 
-export type AiFeature = 'assistant' | 'quote_draft' | 'prose';
+export type AiFeature = 'assistant' | 'quote_draft' | 'prose' | 'transcribe';
 
 /** List prices in USD per 1M tokens (docs/05 §6). Cache read ≈0.1×, write ≈1.25× input. */
 const RATES: Record<string, { input: number; output: number }> = {

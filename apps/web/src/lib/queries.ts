@@ -1,10 +1,10 @@
 import 'server-only';
-import type { SQL } from 'drizzle-orm';
+import type { SQL, Column } from 'drizzle-orm';
 import {
   withTenant, customer, lead, leadActivity, quotation, quotationItem, salesOrder, orderItem,
   taxInvoice, taxInvoiceItem, payment, tenant,
   users, role, userRole, inboundMessage, leadChannel,
-  count, sql, desc, eq, or, ilike, and,
+  count, sql, desc, asc, eq, or, ilike, and,
 } from '@ms/db';
 import { parseLetterhead, paymentStatus, type Letterhead } from '@ms/core';
 import { requireUser } from './rbac';
@@ -12,53 +12,102 @@ import { DEFAULT_WHATSAPP_NUMBER, DEFAULT_INTRO, type OutreachSettings } from '.
 
 const like = (q: string) => `%${q.trim()}%`;
 
-export async function listCustomers(q?: string) {
-  const u = await requireUser();
-  return withTenant(u.tenantId, u.userId, (tx) =>
-    tx.select().from(customer)
-      .where(q?.trim()
-        ? or(ilike(customer.name, like(q)), ilike(customer.gstin, like(q)),
-            ilike(customer.phone, like(q)), ilike(customer.contactPerson, like(q)),
-            ilike(customer.email, like(q)), ilike(customer.address, like(q)))
-        : undefined)
-      .orderBy(desc(customer.createdAt)),
-  );
+// ── Pagination + sorting helpers ────────────────────────────────────────────
+// Lists return a page of rows plus the total match count, so the UI can show
+// "Showing 1–50 of 214" and Prev/Next without ever loading a whole table.
+
+export const PAGE_SIZE = 50;
+
+export type Page<T> = { rows: T[]; total: number; page: number; pageSize: number; totalPages: number };
+
+/** Clamp a 1-based page number and derive the SQL limit/offset window. */
+function pageWindow(page?: number): { page: number; limit: number; offset: number } {
+  const p = Math.max(1, Math.floor(Number(page) || 1));
+  return { page: p, limit: PAGE_SIZE, offset: (p - 1) * PAGE_SIZE };
 }
 
-export async function listLeads(q?: string, stage?: string) {
-  const u = await requireUser();
-  const filters: SQL[] = [];
-  if (q?.trim()) {
-    filters.push(or(
-      ilike(lead.customerName, like(q)), ilike(lead.requirement, like(q)), ilike(lead.source, like(q)),
-      ilike(lead.phone, like(q)), ilike(lead.contact, like(q)),
-    )!);
-  }
-  if (stage?.trim()) filters.push(eq(lead.stage, stage));
-  return withTenant(u.tenantId, u.userId, (tx) =>
-    tx.select().from(lead)
-      .where(filters.length ? and(...filters) : undefined)
-      .orderBy(desc(lead.createdAt)),
-  );
+function paged<T>(rows: T[], total: number, page: number): Page<T> {
+  return { rows, total, page, pageSize: PAGE_SIZE, totalPages: Math.max(1, Math.ceil(total / PAGE_SIZE)) };
 }
 
-export async function listInboundMessages(status?: string, q?: string) {
+/**
+ * Resolve a `sort` string ("col:asc" | "col:dir") against a per-entity column
+ * WHITELIST — never trust the raw param in the query. Falls back to the default
+ * order (usually newest-first) and always appends it as a stable tiebreak.
+ */
+function orderFor(sort: string | undefined, cols: Record<string, Column>, fallback: SQL[]): SQL[] {
+  if (!sort) return fallback;
+  const [name, dir] = sort.split(':');
+  const col = name ? cols[name] : undefined;
+  if (!col) return fallback;
+  return [dir === 'asc' ? asc(col) : desc(col), ...fallback];
+}
+
+export async function listCustomers(opts: { q?: string; page?: number; sort?: string } = {}) {
   const u = await requireUser();
+  const { page, limit, offset } = pageWindow(opts.page);
+  const where = opts.q?.trim()
+    ? or(ilike(customer.name, like(opts.q)), ilike(customer.gstin, like(opts.q)),
+        ilike(customer.phone, like(opts.q)), ilike(customer.contactPerson, like(opts.q)),
+        ilike(customer.email, like(opts.q)), ilike(customer.address, like(opts.q)))
+    : undefined;
+  const order = orderFor(opts.sort,
+    { name: customer.name, credit: customer.creditTermsDays, created: customer.createdAt },
+    [desc(customer.createdAt)]);
+  return withTenant(u.tenantId, u.userId, async (tx) => {
+    const [rows, [c]] = await Promise.all([
+      tx.select().from(customer).where(where).orderBy(...order).limit(limit).offset(offset),
+      tx.select({ n: count() }).from(customer).where(where),
+    ]);
+    return paged(rows, Number(c?.n ?? 0), page);
+  });
+}
+
+export async function listLeads(opts: { q?: string; stage?: string; page?: number; sort?: string } = {}) {
+  const u = await requireUser();
+  const { page, limit, offset } = pageWindow(opts.page);
   const filters: SQL[] = [];
-  if (status?.trim()) filters.push(eq(inboundMessage.status, status));
-  if (q?.trim()) {
+  if (opts.q?.trim()) {
     filters.push(or(
-      ilike(inboundMessage.subject, like(q)),
-      ilike(inboundMessage.fromEmail, like(q)),
-      ilike(inboundMessage.fromName, like(q)),
+      ilike(lead.customerName, like(opts.q)), ilike(lead.requirement, like(opts.q)), ilike(lead.source, like(opts.q)),
+      ilike(lead.phone, like(opts.q)), ilike(lead.contact, like(opts.q)),
     )!);
   }
-  return withTenant(u.tenantId, u.userId, (tx) =>
-    tx.select().from(inboundMessage)
-      .where(filters.length ? and(...filters) : undefined)
-      .orderBy(desc(inboundMessage.receivedAt))
-      .limit(200),
-  );
+  if (opts.stage?.trim()) filters.push(eq(lead.stage, opts.stage));
+  const where = filters.length ? and(...filters) : undefined;
+  const order = orderFor(opts.sort,
+    { customer: lead.customerName, value: lead.valueEstimate, stage: lead.stage, created: lead.createdAt },
+    [desc(lead.createdAt)]);
+  return withTenant(u.tenantId, u.userId, async (tx) => {
+    const [rows, [c]] = await Promise.all([
+      tx.select().from(lead).where(where).orderBy(...order).limit(limit).offset(offset),
+      tx.select({ n: count() }).from(lead).where(where),
+    ]);
+    return paged(rows, Number(c?.n ?? 0), page);
+  });
+}
+
+export async function listInboundMessages(opts: { status?: string; q?: string; page?: number } = {}) {
+  const u = await requireUser();
+  const { page, limit, offset } = pageWindow(opts.page);
+  const filters: SQL[] = [];
+  if (opts.status?.trim()) filters.push(eq(inboundMessage.status, opts.status));
+  if (opts.q?.trim()) {
+    filters.push(or(
+      ilike(inboundMessage.subject, like(opts.q)),
+      ilike(inboundMessage.fromEmail, like(opts.q)),
+      ilike(inboundMessage.fromName, like(opts.q)),
+    )!);
+  }
+  const where = filters.length ? and(...filters) : undefined;
+  return withTenant(u.tenantId, u.userId, async (tx) => {
+    const [rows, [c]] = await Promise.all([
+      tx.select().from(inboundMessage).where(where)
+        .orderBy(desc(inboundMessage.receivedAt)).limit(limit).offset(offset),
+      tx.select({ n: count() }).from(inboundMessage).where(where),
+    ]);
+    return paged(rows, Number(c?.n ?? 0), page);
+  });
 }
 
 export async function getInboundMessage(id: string) {
@@ -152,24 +201,36 @@ export async function customersForSelect() {
   );
 }
 
-export async function listInvoices(q?: string, status?: string) {
+export async function listInvoices(opts: { q?: string; status?: string; page?: number; sort?: string } = {}) {
   const u = await requireUser();
+  const { page, limit, offset } = pageWindow(opts.page);
   const filters: SQL[] = [];
-  if (q?.trim()) filters.push(or(ilike(taxInvoice.number, like(q)), ilike(customer.name, like(q)))!);
-  if (status?.trim()) filters.push(eq(taxInvoice.status, status));
-  return withTenant(u.tenantId, u.userId, (tx) =>
-    tx.select({
-      id: taxInvoice.id, number: taxInvoice.number, docDate: taxInvoice.docDate, dueDate: taxInvoice.dueDate,
-      status: taxInvoice.status, grandTotal: taxInvoice.grandTotal, isInterstate: taxInvoice.isInterstate,
-      customerName: customer.name,
-      received: sql<string>`coalesce(sum(${payment.amount}), 0)`,
-    }).from(taxInvoice)
-      .leftJoin(customer, eq(taxInvoice.customerId, customer.id))
-      .leftJoin(payment, eq(payment.invoiceId, taxInvoice.id))
-      .where(filters.length ? and(...filters) : undefined)
-      .groupBy(taxInvoice.id, customer.name)
-      .orderBy(desc(taxInvoice.createdAt)),
-  );
+  if (opts.q?.trim()) filters.push(or(ilike(taxInvoice.number, like(opts.q)), ilike(customer.name, like(opts.q)))!);
+  if (opts.status?.trim()) filters.push(eq(taxInvoice.status, opts.status));
+  const where = filters.length ? and(...filters) : undefined;
+  const order = orderFor(opts.sort,
+    { number: taxInvoice.number, date: taxInvoice.docDate, due: taxInvoice.dueDate,
+      total: taxInvoice.grandTotal, customer: customer.name },
+    [desc(taxInvoice.createdAt)]);
+  return withTenant(u.tenantId, u.userId, async (tx) => {
+    const [rows, [c]] = await Promise.all([
+      tx.select({
+        id: taxInvoice.id, number: taxInvoice.number, docDate: taxInvoice.docDate, dueDate: taxInvoice.dueDate,
+        status: taxInvoice.status, grandTotal: taxInvoice.grandTotal, isInterstate: taxInvoice.isInterstate,
+        customerName: customer.name,
+        received: sql<string>`coalesce(sum(${payment.amount}), 0)`,
+      }).from(taxInvoice)
+        .leftJoin(customer, eq(taxInvoice.customerId, customer.id))
+        .leftJoin(payment, eq(payment.invoiceId, taxInvoice.id))
+        .where(where)
+        .groupBy(taxInvoice.id, customer.name)
+        .orderBy(...order).limit(limit).offset(offset),
+      tx.select({ n: count() }).from(taxInvoice)
+        .leftJoin(customer, eq(taxInvoice.customerId, customer.id))
+        .where(where),
+    ]);
+    return paged(rows, Number(c?.n ?? 0), page);
+  });
 }
 
 export async function getInvoice(id: string) {
@@ -194,19 +255,28 @@ export async function getLetterhead(): Promise<Letterhead | null> {
   });
 }
 
-export async function listQuotations(q?: string, status?: string) {
+export async function listQuotations(opts: { q?: string; status?: string; page?: number; sort?: string } = {}) {
   const u = await requireUser();
+  const { page, limit, offset } = pageWindow(opts.page);
   const filters: SQL[] = [];
-  if (q?.trim()) filters.push(or(ilike(quotation.number, like(q)), ilike(customer.name, like(q)))!);
-  if (status?.trim()) filters.push(eq(quotation.status, status));
-  return withTenant(u.tenantId, u.userId, (tx) =>
-    tx.select({
-      id: quotation.id, number: quotation.number, docDate: quotation.docDate, status: quotation.status,
-      grandTotal: quotation.grandTotal, customerName: customer.name, convertedInvoiceId: quotation.convertedInvoiceId,
-    }).from(quotation).leftJoin(customer, eq(quotation.customerId, customer.id))
-      .where(filters.length ? and(...filters) : undefined)
-      .orderBy(desc(quotation.createdAt)),
-  );
+  if (opts.q?.trim()) filters.push(or(ilike(quotation.number, like(opts.q)), ilike(customer.name, like(opts.q)))!);
+  if (opts.status?.trim()) filters.push(eq(quotation.status, opts.status));
+  const where = filters.length ? and(...filters) : undefined;
+  const order = orderFor(opts.sort,
+    { number: quotation.number, date: quotation.docDate, total: quotation.grandTotal, customer: customer.name },
+    [desc(quotation.createdAt)]);
+  return withTenant(u.tenantId, u.userId, async (tx) => {
+    const [rows, [c]] = await Promise.all([
+      tx.select({
+        id: quotation.id, number: quotation.number, docDate: quotation.docDate, status: quotation.status,
+        grandTotal: quotation.grandTotal, customerName: customer.name, convertedInvoiceId: quotation.convertedInvoiceId,
+      }).from(quotation).leftJoin(customer, eq(quotation.customerId, customer.id))
+        .where(where).orderBy(...order).limit(limit).offset(offset),
+      tx.select({ n: count() }).from(quotation)
+        .leftJoin(customer, eq(quotation.customerId, customer.id)).where(where),
+    ]);
+    return paged(rows, Number(c?.n ?? 0), page);
+  });
 }
 
 export async function getQuotation(id: string) {
@@ -338,21 +408,31 @@ export async function analyticsData() {
   });
 }
 
-export async function listOrders(q?: string, status?: string) {
+export async function listOrders(opts: { q?: string; status?: string; page?: number; sort?: string } = {}) {
   const u = await requireUser();
+  const { page, limit, offset } = pageWindow(opts.page);
   const filters: SQL[] = [];
-  if (q?.trim()) filters.push(or(ilike(salesOrder.number, like(q)), ilike(customer.name, like(q)), ilike(salesOrder.poRef, like(q)))!);
-  if (status?.trim()) filters.push(eq(salesOrder.status, status));
-  return withTenant(u.tenantId, u.userId, (tx) =>
-    tx.select({
-      id: salesOrder.id, number: salesOrder.number, docDate: salesOrder.docDate, status: salesOrder.status,
-      poRef: salesOrder.poRef, orderCategory: salesOrder.orderCategory, materialOwnership: salesOrder.materialOwnership,
-      deliveryDate: salesOrder.deliveryDate, totalValue: salesOrder.totalValue,
-      convertedInvoiceId: salesOrder.convertedInvoiceId, customerName: customer.name,
-    }).from(salesOrder).leftJoin(customer, eq(salesOrder.customerId, customer.id))
-      .where(filters.length ? and(...filters) : undefined)
-      .orderBy(desc(salesOrder.createdAt)),
-  );
+  if (opts.q?.trim()) filters.push(or(ilike(salesOrder.number, like(opts.q)), ilike(customer.name, like(opts.q)), ilike(salesOrder.poRef, like(opts.q)))!);
+  if (opts.status?.trim()) filters.push(eq(salesOrder.status, opts.status));
+  const where = filters.length ? and(...filters) : undefined;
+  const order = orderFor(opts.sort,
+    { number: salesOrder.number, date: salesOrder.docDate, delivery: salesOrder.deliveryDate,
+      value: salesOrder.totalValue, customer: customer.name },
+    [desc(salesOrder.createdAt)]);
+  return withTenant(u.tenantId, u.userId, async (tx) => {
+    const [rows, [c]] = await Promise.all([
+      tx.select({
+        id: salesOrder.id, number: salesOrder.number, docDate: salesOrder.docDate, status: salesOrder.status,
+        poRef: salesOrder.poRef, orderCategory: salesOrder.orderCategory, materialOwnership: salesOrder.materialOwnership,
+        deliveryDate: salesOrder.deliveryDate, totalValue: salesOrder.totalValue,
+        convertedInvoiceId: salesOrder.convertedInvoiceId, customerName: customer.name,
+      }).from(salesOrder).leftJoin(customer, eq(salesOrder.customerId, customer.id))
+        .where(where).orderBy(...order).limit(limit).offset(offset),
+      tx.select({ n: count() }).from(salesOrder)
+        .leftJoin(customer, eq(salesOrder.customerId, customer.id)).where(where),
+    ]);
+    return paged(rows, Number(c?.n ?? 0), page);
+  });
 }
 
 export async function getOrder(id: string) {
@@ -423,6 +503,34 @@ export async function dashboardData() {
       receivables += ps.outstanding;
       if (ps.state === 'overdue') overdue += ps.outstanding;
     }
+
+    // Action center: the specific overdue invoices and due follow-ups to act on
+    // (with the customer's phone so the dashboard can offer one-tap WhatsApp).
+    const overdueRows = await tx.select({
+      id: taxInvoice.id, number: taxInvoice.number, dueDate: taxInvoice.dueDate,
+      grandTotal: taxInvoice.grandTotal, customerName: customer.name, phone: customer.phone,
+      received: sql<string>`coalesce(sum(${payment.amount}), 0)`,
+    }).from(taxInvoice)
+      .leftJoin(customer, eq(taxInvoice.customerId, customer.id))
+      .leftJoin(payment, eq(payment.invoiceId, taxInvoice.id))
+      .where(sql`${taxInvoice.status} <> 'cancelled' and ${taxInvoice.dueDate} is not null and ${taxInvoice.dueDate} < now()`)
+      .groupBy(taxInvoice.id, customer.name, customer.phone);
+    const overdueInvoices = overdueRows
+      .map((r) => ({
+        id: r.id, number: r.number, dueDate: r.dueDate, customerName: r.customerName, phone: r.phone,
+        outstanding: Math.round((Number(r.grandTotal) - Number(r.received)) * 100) / 100,
+      }))
+      .filter((r) => r.outstanding > 0.5)
+      .sort((a, b) => b.outstanding - a.outstanding)
+      .slice(0, 6);
+
+    const followupLeads = await tx.select({
+      id: lead.id, customerName: lead.customerName, contact: lead.contact, phone: lead.phone,
+      requirement: lead.requirement, nextFollowupAt: lead.nextFollowupAt,
+    }).from(lead)
+      .where(sql`${lead.nextFollowupAt} is not null and ${lead.nextFollowupAt} <= now() and ${lead.stage} not in ('won','lost')`)
+      .orderBy(asc(lead.nextFollowupAt)).limit(6);
+
     const recentQuotations = await tx.select({
       id: quotation.id, number: quotation.number, docDate: quotation.docDate,
       status: quotation.status, grandTotal: quotation.grandTotal, customerName: customer.name,
@@ -447,6 +555,8 @@ export async function dashboardData() {
       followupsDue: Number(followups?.n ?? 0),
       receivables,
       overdue,
+      overdueInvoices,
+      followupLeads,
       recentQuotations,
       recentInvoices,
     };

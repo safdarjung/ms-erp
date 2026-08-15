@@ -4,7 +4,7 @@ import { revalidatePath } from 'next/cache';
 import { orderInput, ORDER_SETTABLE_STATUSES } from '@ms/core';
 import { withTenant, salesOrder, eq } from '@ms/db';
 import { requirePermission } from '@/lib/rbac';
-import { insertOrderTx, convertOrderToInvoiceTx } from '@/lib/documents';
+import { insertOrderTx, convertOrderToInvoiceTx, duplicateOrderTx } from '@/lib/documents';
 import { toActionError, type ActionResult } from '@/lib/forms';
 
 export type ActionState = { error?: string };
@@ -59,6 +59,21 @@ export async function setOrderStatusAction(id: string, status: string): Promise<
   } catch (e) {
     return { error: toActionError(e) };
   }
+}
+
+export async function duplicateOrderAction(formData: FormData): Promise<void> {
+  let newId: string | undefined;
+  try {
+    const u = await requirePermission('order.create');
+    const id = String(formData.get('id') ?? '');
+    if (!id) throw new Error('Missing order');
+    const res = await withTenant(u.tenantId, u.userId, (tx) => duplicateOrderTx(tx, u, id));
+    newId = res.id;
+    revalidatePath('/orders');
+  } catch (e) {
+    throw new Error(toActionError(e));
+  }
+  if (newId) redirect(`/orders/${newId}`);
 }
 
 export async function convertOrderToInvoiceAction(_prev: ActionResult, formData: FormData): Promise<ActionResult> {

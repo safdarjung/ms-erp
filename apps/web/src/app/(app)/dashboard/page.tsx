@@ -3,9 +3,20 @@ import type { ReactNode } from 'react';
 import { aiEnabled } from '@ms/ai';
 import { formatINR, formatINRShort, LEAD_STAGES, LEAD_STAGE_LABELS } from '@ms/core';
 import { requireUser } from '@/lib/rbac';
-import { dashboardData } from '@/lib/queries';
+import { dashboardData, getOutreachSettings } from '@/lib/queries';
+import { buildWhatsappLink, buildPaymentReminderLink } from '@/lib/outreach';
 import { formatDate } from '@/lib/format';
+import { WhatsappButton } from '@/components/whatsapp-button';
 import { AskCard, AskAiButton } from './ask-card';
+
+/** "3 days overdue" / "due today" for a past-due date. */
+function overdueLabel(due: Date | string | null): string {
+  if (!due) return '';
+  const d = typeof due === 'string' ? new Date(due) : due;
+  const days = Math.floor((Date.now() - d.getTime()) / 86_400_000);
+  if (days <= 0) return 'due today';
+  return `${days} day${days > 1 ? 's' : ''} overdue`;
+}
 
 export const metadata = { title: 'Dashboard' };
 
@@ -63,7 +74,7 @@ function RecentDocs({
 
 export default async function DashboardPage() {
   const user = await requireUser();
-  const d = await dashboardData();
+  const [d, outreach] = await Promise.all([dashboardData(), getOutreachSettings()]);
   const firstName = user.name.split(' ')[0];
   const pipelineOpen = d.pipeline.filter((p) => !['won', 'lost'].includes(p.stage));
   const pipelineValue = pipelineOpen.reduce((s, p) => s + p.value, 0);
@@ -93,17 +104,54 @@ export default async function DashboardPage() {
         New here? <Link href="/guide" className="text-accent hover:underline font-medium">Take the quick tour →</Link>
       </p>
 
-      {(d.overdue > 0.5 || d.followupsDue > 0) && (
-        <div className="flex flex-wrap gap-3 mb-6">
-          {d.overdue > 0.5 && (
-            <Link href="/invoices" className="flex items-center gap-2 rounded-lg border border-crit/30 bg-[#f6e6e2]/60 px-3.5 py-2 text-sm text-crit hover:bg-[#f6e6e2] transition-colors">
-              <span aria-hidden>⚠</span> <b>{formatINR(d.overdue)}</b> overdue receivables <span aria-hidden>→</span>
-            </Link>
+      {(d.overdueInvoices.length > 0 || d.followupLeads.length > 0) && (
+        <div className="grid sm:grid-cols-2 gap-4 mb-6">
+          {d.overdueInvoices.length > 0 && (
+            <div className="card border-crit/30">
+              <div className="flex items-center justify-between px-4 py-2.5 border-b border-line">
+                <span className="font-medium text-sm text-crit flex items-center gap-1.5"><span aria-hidden>⚠</span> Overdue payments</span>
+                <Link href="/invoices" className="text-xs text-steel hover:underline">All →</Link>
+              </div>
+              <ul className="divide-y divide-line">
+                {d.overdueInvoices.map((r) => {
+                  const wa = buildPaymentReminderLink({ phone: r.phone, customerName: r.customerName, invoiceNumber: r.number, outstanding: r.outstanding, companyNumber: outreach.whatsappNumber });
+                  return (
+                    <li key={r.id} className="flex items-center gap-2 px-4 py-2 text-sm">
+                      <div className="min-w-0 flex-1">
+                        <Link href={`/invoices/${r.id}`} className="font-mono text-xs text-steel hover:underline">{r.number}</Link>
+                        <span className="text-ink"> · {r.customerName ?? '—'}</span>
+                        <div className="text-xs text-crit/80">{overdueLabel(r.dueDate)}</div>
+                      </div>
+                      <span className="tabular-nums font-mono text-crit whitespace-nowrap">{formatINR(r.outstanding)}</span>
+                      {wa && <WhatsappButton href={wa} />}
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
           )}
-          {d.followupsDue > 0 && (
-            <Link href="/leads" className="flex items-center gap-2 rounded-lg border border-warn/30 bg-[#f6efd9]/70 px-3.5 py-2 text-sm text-warn hover:bg-[#f6efd9] transition-colors">
-              <span aria-hidden>◷</span> <b>{d.followupsDue}</b> follow-up{d.followupsDue > 1 ? 's' : ''} due <span aria-hidden>→</span>
-            </Link>
+          {d.followupLeads.length > 0 && (
+            <div className="card border-warn/30">
+              <div className="flex items-center justify-between px-4 py-2.5 border-b border-line">
+                <span className="font-medium text-sm text-warn flex items-center gap-1.5"><span aria-hidden>◷</span> Follow-ups due</span>
+                <Link href="/leads" className="text-xs text-steel hover:underline">All →</Link>
+              </div>
+              <ul className="divide-y divide-line">
+                {d.followupLeads.map((l) => {
+                  const wa = buildWhatsappLink({ phone: l.phone, name: l.contact || l.customerName, product: l.requirement, settings: outreach });
+                  return (
+                    <li key={l.id} className="flex items-center gap-2 px-4 py-2 text-sm">
+                      <div className="min-w-0 flex-1">
+                        <Link href={`/leads/${l.id}`} className="font-medium text-ink hover:text-accent hover:underline">{l.customerName}</Link>
+                        {l.requirement && <div className="text-xs text-faint truncate">{l.requirement}</div>}
+                      </div>
+                      <span className="text-xs text-warn whitespace-nowrap">{overdueLabel(l.nextFollowupAt)}</span>
+                      {wa && <WhatsappButton href={wa} />}
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
           )}
         </div>
       )}

@@ -71,15 +71,24 @@ export async function* runGeminiAssistant(
   const ai = gemini();
   const usage = emptyUsage();
 
-  const contents: Content[] = history.map((t) => ({
-    role: t.role === 'assistant' ? 'model' : 'user',
-    parts: [{ text: t.content }],
-  }));
+  const contents: Content[] = history.map((t) => {
+    const role = t.role === 'assistant' ? 'model' : 'user';
+    // Attach images/PDFs inline on the user turn that carries them so the
+    // model can read them (extraction); text-only turns stay as before.
+    if (t.role === 'user' && t.attachments?.length) {
+      const parts: Part[] = [];
+      if (t.content.trim()) parts.push({ text: t.content });
+      for (const a of t.attachments) parts.push({ inlineData: { mimeType: a.mimeType, data: a.data } });
+      return { role, parts };
+    }
+    return { role, parts: [{ text: t.content }] };
+  });
 
   const config = {
     systemInstruction:
       `${ASSISTANT_SYSTEM_PROMPT}\n\nToday is ${ctx.today}. Business: ${ctx.tenantName}. You are talking to ${ctx.userName}. ` +
-      `Their permissions: ${[...ctx.permissions].sort().join(', ') || '(none)'}.`,
+      `Their permissions: ${[...ctx.permissions].sort().join(', ') || '(none)'}.` +
+      (ctx.pageContext ? `\nCurrent page: ${ctx.pageContext}` : ''),
     tools: [{ functionDeclarations: FUNCTIONS }],
     abortSignal: ctx.signal,
   };

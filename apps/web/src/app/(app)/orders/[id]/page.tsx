@@ -11,7 +11,7 @@ import { formatDate } from '@/lib/format';
 import { StatusPill } from '@/components/status-pill';
 import { ConfirmButton } from '@/components/confirm-button';
 import { OrderStatusSelect } from '../status-select';
-import { convertOrderToInvoiceAction } from '../actions';
+import { convertOrderToInvoiceAction, duplicateOrderAction } from '../actions';
 
 export const metadata = { title: 'Order' };
 
@@ -37,6 +37,12 @@ export default async function OrderDetail({ params }: { params: Promise<{ id: st
             : <OrderStatusSelect id={o.id} status={o.status} />}
         </div>
         <div className="flex gap-2">
+          {can(user, 'order.create') && (
+            <form action={duplicateOrderAction}>
+              <input type="hidden" name="id" value={o.id} />
+              <button type="submit" className="btn-ghost">Duplicate</button>
+            </form>
+          )}
           {invoiced ? (
             <Link href={`/invoices/${o.convertedInvoiceId}`} className="btn-primary">View invoice →</Link>
           ) : (

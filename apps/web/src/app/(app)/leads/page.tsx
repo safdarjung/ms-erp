@@ -4,6 +4,7 @@ import { buildWhatsappLink } from '@/lib/outreach';
 import { requireUser, can } from '@/lib/rbac';
 import Link from 'next/link';
 import { FilterBar } from '@/components/filter-bar';
+import { Pagination, SortLink } from '@/components/pagination';
 import { ConfirmButton } from '@/components/confirm-button';
 import { WhatsappButton } from '@/components/whatsapp-button';
 import { LeadForm } from './lead-form';
@@ -15,13 +16,14 @@ export const metadata = { title: 'Leads' };
 export default async function LeadsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string; stage?: string }>;
+  searchParams: Promise<{ q?: string; stage?: string; page?: string; sort?: string }>;
 }) {
-  const { q, stage } = await searchParams;
+  const { q, stage, page, sort } = await searchParams;
   const user = await requireUser();
-  const rows = await listLeads(q, stage);
+  const { rows, total, page: current, pageSize } = await listLeads({ q, stage, page: Number(page), sort });
   const outreach = await getOutreachSettings();
   const canConvert = can(user, 'customer.create');
+  const params = { q, stage, sort };
 
   return (
     <div className="max-w-5xl">
@@ -50,8 +52,11 @@ export default async function LeadsPage({
         <table className="w-full text-sm min-w-[640px]">
           <thead>
             <tr className="text-left text-faint border-b border-line text-xs uppercase tracking-wide [&>th]:px-4 [&>th]:py-2.5 [&>th]:font-medium">
-              <th>Source</th><th>Customer</th><th>Requirement</th>
-              <th className="text-right">Est. value</th><th>Stage</th><th></th>
+              <th>Source</th>
+              <th><SortLink basePath="/leads" params={params} col="customer" label="Customer" /></th>
+              <th>Requirement</th>
+              <th className="text-right"><SortLink basePath="/leads" params={params} col="value" label="Est. value" align="right" /></th>
+              <th>Stage</th><th></th>
             </tr>
           </thead>
           <tbody>
@@ -102,6 +107,7 @@ export default async function LeadsPage({
           </tbody>
         </table>
       </div>
+      <Pagination basePath="/leads" params={params} page={current} pageSize={pageSize} total={total} />
     </div>
   );
 }

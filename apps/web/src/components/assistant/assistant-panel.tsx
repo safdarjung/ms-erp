@@ -1,6 +1,6 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, usePathname } from 'next/navigation';
 import { MicButton } from './mic-button';
 
 // ── Types mirrored from the NDJSON protocol of /api/assistant ───────────────
@@ -29,16 +29,62 @@ type Part =
   | { kind: 'action'; action: ActionInfo; phase: ActionPhase; result?: string; path?: string }
   | { kind: 'nav'; label: string; path: string; newTab?: boolean };
 type Msg =
-  | { role: 'user'; text: string; hidden?: boolean }
+  | { role: 'user'; text: string; hidden?: boolean; files?: string[] }
   | { role: 'assistant'; parts: Part[] };
 
-const SUGGESTIONS = [
+// Multimodal attachment (base64, no data: prefix) — mirrors @ms/ai's protocol.
+// Kept local so this client bundle never imports the server-side AI package.
+type Attachment = { name?: string; mimeType: string; data: string };
+type PendingFile = Attachment & { name: string; size: number };
+
+const ATTACH_ACCEPT = 'application/pdf,image/jpeg,image/png,image/webp,image/heic,image/heif';
+const ATTACH_MIMES = new Set(['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif']);
+const MAX_FILES = 3;
+const MAX_FILE_BYTES = 7 * 1024 * 1024;
+const MAX_FILES_TOTAL_BYTES = 15 * 1024 * 1024;
+
+/** Read a File into base64 (strips the `data:<mime>;base64,` prefix). */
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const res = String(reader.result);
+      const comma = res.indexOf(',');
+      resolve(comma >= 0 ? res.slice(comma + 1) : res);
+    };
+    reader.onerror = () => reject(reader.error ?? new Error('read failed'));
+    reader.readAsDataURL(file);
+  });
+}
+
+const isImageMime = (m: string) => m.startsWith('image/');
+
+const DEFAULT_SUGGESTIONS = [
+  'What needs my attention today?',
   'Top 5 customers by invoiced value',
   'Record a lead: Bharat Pumps — VMC job work enquiry, approx ₹1.2L',
   'Sharma Auto ke liye pichhle rate pe ek quotation banao',
-  'Mark the latest quotation as sent',
   'इस महीने कितनी बिक्री हुई?',
 ];
+
+const UUID_SEG = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+
+/** Starter prompts tuned to the screen the user is on (falls back to the defaults). */
+function suggestionsFor(path: string | null): string[] {
+  if (!path) return DEFAULT_SUGGESTIONS;
+  const onRecord = (base: string) => path.startsWith(base + '/') && UUID_SEG.test(path);
+  if (onRecord('/invoices')) return ['Record a payment on this invoice', 'What is still outstanding on this bill?', 'Open this invoice as a PDF', 'Cancel this invoice'];
+  if (onRecord('/quotations')) return ['Mark this quotation as sent', 'Convert this quotation to an invoice', 'Revise the rates on this quotation', 'Open this quotation as a PDF'];
+  if (onRecord('/orders')) return ['Move this order to In production', 'Raise a GST invoice from this order', 'Mark this order delivered'];
+  if (onRecord('/customers')) return ['Draft a quotation for this customer', "Show this customer's outstanding invoices", 'What have we billed this customer this year?'];
+  if (onRecord('/leads')) return ['Log a call on this lead', 'Set a follow-up for this lead next Monday', 'Convert this lead to a customer'];
+  if (path.startsWith('/leads')) return ['What follow-ups are due today?', 'Record a lead: Bharat Pumps — VMC job work, approx ₹1.2L', 'Leads by source this month'];
+  if (path.startsWith('/invoices')) return ['Who owes us money right now?', 'What did we invoice this month?', "This year's overdue invoices"];
+  if (path.startsWith('/quotations')) return ['Open quotations not yet converted', 'Sharma Auto ke liye pichhle rate pe quotation banao', 'Quotation win-rate this year'];
+  if (path.startsWith('/orders')) return ['Orders due for delivery this week', 'Open orders not yet invoiced', 'Order book value by category'];
+  if (path.startsWith('/customers')) return ['Top 5 customers by invoiced value', 'Customers with overdue balances', 'New customers added this month'];
+  return DEFAULT_SUGGESTIONS;
+}
 
 /** Open the assistant from anywhere: window.dispatchEvent(new CustomEvent('ms-assistant', {detail:{question}})) */
 export function openAssistant(question?: string) {
@@ -346,15 +392,21 @@ function serializeParts(parts: Part[]): string {
 
 export function AssistantPanel({ enabled }: { enabled: boolean }) {
   const router = useRouter();
+  const pathname = usePathname();
+  const pathnameRef = useRef(pathname);
+  pathnameRef.current = pathname;
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [input, setInput] = useState('');
   const [micStop, setMicStop] = useState(0); // bump to force-stop voice dictation
   const dictationBase = useRef(''); // input text captured when voice dictation starts
   const [msgs, setMsgs] = useState<Msg[]>([]);
+  const [files, setFiles] = useState<PendingFile[]>([]); // staged attachments for the next send
+  const [attachErr, setAttachErr] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const msgsRef = useRef<Msg[]>(msgs);
 
   // Single mutation path: the ref is authoritative and updated synchronously,
@@ -383,9 +435,10 @@ export function AssistantPanel({ enabled }: { enabled: boolean }) {
     else router.push(path);
   }, [router]);
 
-  const send = useCallback(async (question: string, opts?: { hidden?: boolean }) => {
-    const q = question.trim();
-    if (!q || abortRef.current) return;
+  const send = useCallback(async (question: string, opts?: { hidden?: boolean; attachments?: Attachment[] }) => {
+    const atts = opts?.attachments ?? [];
+    const q = question.trim() || (atts.length ? 'Please read the attached document and pull out the details.' : '');
+    if ((!q && !atts.length) || abortRef.current) return;
     setMicStop((n) => n + 1); // stop any live voice dictation on send
     setInput('');
     setBusy(true);
@@ -405,14 +458,18 @@ export function AssistantPanel({ enabled }: { enabled: boolean }) {
     }
 
     const historyBase = msgsRef.current;
-    updateMsgs((cur) => [...cur, { role: 'user', text: q, hidden: opts?.hidden }, { role: 'assistant', parts: [] }]);
+    updateMsgs((cur) => [...cur, {
+      role: 'user', text: q, hidden: opts?.hidden,
+      files: atts.length ? atts.map((a) => a.name ?? 'file') : undefined,
+    }, { role: 'assistant', parts: [] }]);
 
     // Server sees text turns; tables/charts are re-derived, actions summarized.
+    // Attachments ride only on this outgoing turn (transient — never re-sent).
     const turns = [...historyBase.map((m) =>
       m.role === 'user'
         ? { role: 'user' as const, content: m.text }
         : { role: 'assistant' as const, content: serializeParts(m.parts) },
-    ), { role: 'user' as const, content: q }].slice(-20);
+    ), { role: 'user' as const, content: q, ...(atts.length ? { attachments: atts } : {}) }].slice(-20);
 
     const patch = (fn: (parts: Part[]) => Part[]) =>
       updateMsgs((cur) => {
@@ -430,7 +487,7 @@ export function AssistantPanel({ enabled }: { enabled: boolean }) {
       const res = await fetch('/api/assistant', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ messages: turns }),
+        body: JSON.stringify({ messages: turns, context: { path: pathnameRef.current ?? '' } }),
         signal: ac.signal,
       });
 
@@ -538,6 +595,28 @@ export function AssistantPanel({ enabled }: { enabled: boolean }) {
     }
   }, [patchAction, router, send]);
 
+  /** Validate + read picked files into base64, enforcing type/size/count caps. */
+  const onPickFiles = useCallback(async (fileList: FileList | null) => {
+    if (!fileList?.length) return;
+    setAttachErr(null);
+    const next: PendingFile[] = [];
+    let err: string | null = null;
+    let runningTotal = files.reduce((s, f) => s + f.size, 0);
+    for (const file of Array.from(fileList)) {
+      if (files.length + next.length >= MAX_FILES) { err = `Up to ${MAX_FILES} files at a time.`; break; }
+      if (!ATTACH_MIMES.has(file.type)) { err = `${file.name || 'File'}: unsupported — attach a PDF or image.`; continue; }
+      if (file.size > MAX_FILE_BYTES) { err = `${file.name}: too large (max ${Math.round(MAX_FILE_BYTES / 1024 / 1024)} MB).`; continue; }
+      if (runningTotal + file.size > MAX_FILES_TOTAL_BYTES) { err = 'Those attachments are too large together.'; break; }
+      try {
+        const data = await fileToBase64(file);
+        next.push({ name: file.name || 'file', mimeType: file.type, size: file.size, data });
+        runningTotal += file.size;
+      } catch { err = `${file.name}: could not read the file.`; }
+    }
+    if (next.length) setFiles((cur) => [...cur, ...next].slice(0, MAX_FILES));
+    if (err) setAttachErr(err);
+  }, [files]);
+
   // Global open events + ⌘K / Ctrl+K + Esc
   useEffect(() => {
     const onEvent = (e: Event) => {
@@ -580,7 +659,7 @@ export function AssistantPanel({ enabled }: { enabled: boolean }) {
             <div className="text-[0.65rem] text-faint leading-tight">Ask &amp; act on your ERP · English / हिन्दी</div>
           </div>
           {msgs.length > 0 && (
-            <button onClick={() => { stop(); updateMsgs(() => []); }} className="text-xs text-steel hover:underline" disabled={busy}>
+            <button onClick={() => { stop(); updateMsgs(() => []); setFiles([]); setAttachErr(null); }} className="text-xs text-steel hover:underline" disabled={busy}>
               Clear
             </button>
           )}
@@ -602,7 +681,7 @@ export function AssistantPanel({ enabled }: { enabled: boolean }) {
               )}
               <p className="eyebrow mb-2">Try asking</p>
               <div className="flex flex-col gap-1.5">
-                {SUGGESTIONS.map((s) => (
+                {suggestionsFor(pathname).map((s) => (
                   <button
                     key={s}
                     onClick={() => send(s)}
@@ -625,7 +704,19 @@ export function AssistantPanel({ enabled }: { enabled: boolean }) {
             m.role === 'user' ? (
               m.hidden ? null : (
                 <div key={i} className="flex justify-end">
-                  <div className="max-w-[85%] bg-accent text-white text-sm px-3.5 py-2 rounded-2xl rounded-br-sm whitespace-pre-wrap">{m.text}</div>
+                  <div className="max-w-[85%] space-y-1">
+                    {m.files && m.files.length > 0 && (
+                      <div className="flex flex-wrap gap-1 justify-end">
+                        {m.files.map((n, k) => (
+                          <span key={k} className="inline-flex items-center gap-1 text-[0.7rem] text-accent bg-accent-soft/60 border border-accent/30 rounded-full px-2 py-0.5">
+                            <span aria-hidden>📎</span>
+                            <span className="truncate max-w-[9rem]" title={n}>{n}</span>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    <div className="bg-accent text-white text-sm px-3.5 py-2 rounded-2xl rounded-br-sm whitespace-pre-wrap">{m.text}</div>
+                  </div>
                 </div>
               )
             ) : (
@@ -664,15 +755,58 @@ export function AssistantPanel({ enabled }: { enabled: boolean }) {
         </div>
 
         <form
-          onSubmit={(e) => { e.preventDefault(); send(input); }}
+          onSubmit={(e) => {
+            e.preventDefault();
+            const atts: Attachment[] = files.map(({ name, mimeType, data }) => ({ name, mimeType, data }));
+            send(input, atts.length ? { attachments: atts } : undefined);
+            setFiles([]); setAttachErr(null);
+          }}
           className="p-3 border-t border-line bg-surface shrink-0"
         >
+          {(files.length > 0 || attachErr) && (
+            <div className="mb-2 space-y-1.5">
+              {files.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {files.map((f, i) => (
+                    <span key={i} className="inline-flex items-center gap-1.5 max-w-[12rem] text-xs bg-surface-2 border border-line rounded-full pl-2 pr-1 py-1">
+                      <span aria-hidden>{isImageMime(f.mimeType) ? '🖼' : '📄'}</span>
+                      <span className="truncate text-muted" title={f.name}>{f.name}</span>
+                      <button type="button" onClick={() => setFiles((cur) => cur.filter((_, x) => x !== i))} aria-label={`Remove ${f.name}`} className="text-faint hover:text-crit px-0.5">✕</button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              {attachErr && <div className="text-[0.7rem] text-crit">{attachErr}</div>}
+            </div>
+          )}
           <div className="flex gap-2">
+            {enabled && (
+              <>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept={ATTACH_ACCEPT}
+                  multiple
+                  className="hidden"
+                  onChange={(e) => { void onPickFiles(e.target.files); e.target.value = ''; }}
+                />
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={busy || files.length >= MAX_FILES}
+                  className="btn-ghost shrink-0 !px-3 disabled:opacity-50"
+                  aria-label="Attach a document or photo"
+                  title="Attach a document or photo (PDF or image)"
+                >
+                  📎
+                </button>
+              </>
+            )}
             <input
               ref={inputRef}
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder={enabled ? 'Ask, or tell me what to do…' : 'AI not configured'}
+              placeholder={enabled ? 'Ask, attach a doc, or tell me what to do…' : 'AI not configured'}
               disabled={!enabled || busy}
               className="field flex-1"
               aria-label="Ask the assistant"
@@ -689,7 +823,7 @@ export function AssistantPanel({ enabled }: { enabled: boolean }) {
             {busy ? (
               <button type="button" onClick={stop} className="btn-ghost shrink-0" aria-label="Stop">■ Stop</button>
             ) : (
-              <button type="submit" disabled={!enabled || !input.trim()} className="btn-primary shrink-0 disabled:opacity-50">Ask</button>
+              <button type="submit" disabled={!enabled || (!input.trim() && files.length === 0)} className="btn-primary shrink-0 disabled:opacity-50">Ask</button>
             )}
           </div>
         </form>

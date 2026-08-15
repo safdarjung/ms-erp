@@ -57,13 +57,40 @@ export type AssistantEvent =
   | { type: 'done'; usage: TokenUsage; model: string }
   | { type: 'error'; message: string };
 
-export type ChatTurn = { role: 'user' | 'assistant'; content: string };
+// ── Attachments (multimodal input) ──────────────────────────────────────────
+// A user turn may carry images / PDFs the model reads to extract details
+// (a visiting card → customer, a purchase order → quotation/invoice lines).
+// Bytes are base64 (no data: prefix). Used transiently for extraction only —
+// never persisted — so they ride on the turn that sends them and nowhere else.
+
+export const ATTACH_MIME_TYPES = [
+  'application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif',
+] as const;
+export type AttachMime = (typeof ATTACH_MIME_TYPES)[number];
+
+export const MAX_ATTACHMENTS = 3;
+/** Per-file raw byte cap (before base64). */
+export const MAX_ATTACHMENT_BYTES = 7 * 1024 * 1024;
+/** Combined raw byte cap across a request. */
+export const MAX_ATTACHMENTS_TOTAL_BYTES = 15 * 1024 * 1024;
+/** Base64 length is ~4/3 of raw bytes — the length cap for a base64 string of `bytes`. */
+export const base64LenCap = (bytes: number): number => Math.ceil(bytes / 3) * 4;
+
+export type Attachment = { name?: string; mimeType: AttachMime; data: string };
+
+export type ChatTurn = { role: 'user' | 'assistant'; content: string; attachments?: Attachment[] };
 
 export type AssistantContext = {
   tenantName: string;
   userName: string;
   /** e.g. "Wednesday, 30 July 2026" in the business timezone. */
   today: string;
+  /**
+   * One line describing the screen/record the user is currently viewing (and,
+   * for a record page, its trusted uuid) so "this invoice / current quote / here"
+   * resolve without a lookup. Omitted when the page carries no useful context.
+   */
+  pageContext?: string;
   /** Permission keys this user holds — the loop refuses tools outside them. */
   permissions: ReadonlySet<string>;
   /** Execute already-guarded SQL inside a READ ONLY tenant transaction. */

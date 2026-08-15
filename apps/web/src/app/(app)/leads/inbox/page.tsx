@@ -5,6 +5,7 @@ import { listInboundMessages, inboxPendingCount, getOutreachSettings } from '@/l
 import { buildWhatsappLink } from '@/lib/outreach';
 import { formatDate } from '@/lib/format';
 import { FilterBar } from '@/components/filter-bar';
+import { Pagination } from '@/components/pagination';
 import { InboxRow, type InboxMessage } from './inbox-row';
 import { signedUrl } from '@/lib/ingest/storage';
 import type { ExtractedLead, StoredAttachment } from '@/lib/ingest/types';
@@ -22,15 +23,16 @@ const STATUS_CHIPS = [
 export default async function LeadInboxPage({
   searchParams,
 }: {
-  searchParams: Promise<{ status?: string; q?: string }>;
+  searchParams: Promise<{ status?: string; q?: string; page?: string }>;
 }) {
-  const { status, q } = await searchParams;
+  const { status, q, page } = await searchParams;
   const user = await requireUser();
   if (!can(user, 'lead_inbox.view')) redirect('/dashboard');
 
-  const [rows, pending, outreach] = await Promise.all([
-    listInboundMessages(status, q), inboxPendingCount(), getOutreachSettings(),
+  const [list, pending, outreach] = await Promise.all([
+    listInboundMessages({ status, q, page: Number(page) }), inboxPendingCount(), getOutreachSettings(),
   ]);
+  const { rows, total, page: current, pageSize } = list;
   const canManage = can(user, 'lead_inbox.manage');
   const canManageChannels = can(user, 'lead_channel.manage');
 
@@ -107,6 +109,7 @@ export default async function LeadInboxPage({
           </div>
         )}
       </div>
+      <Pagination basePath="/leads/inbox" params={{ status, q }} page={current} pageSize={pageSize} total={total} />
     </div>
   );
 }

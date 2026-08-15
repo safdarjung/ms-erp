@@ -4,6 +4,7 @@ import { requireUser, can } from '@/lib/rbac';
 import { listOrders } from '@/lib/queries';
 import { formatDate } from '@/lib/format';
 import { FilterBar } from '@/components/filter-bar';
+import { Pagination, SortLink } from '@/components/pagination';
 import { StatusPill } from '@/components/status-pill';
 
 export const metadata = { title: 'Orders' };
@@ -11,11 +12,12 @@ export const metadata = { title: 'Orders' };
 export default async function OrdersPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string; status?: string }>;
+  searchParams: Promise<{ q?: string; status?: string; page?: string; sort?: string }>;
 }) {
-  const { q, status } = await searchParams;
+  const { q, status, page, sort } = await searchParams;
   const user = await requireUser();
-  const rows = await listOrders(q, status);
+  const { rows, total, page: current, pageSize } = await listOrders({ q, status, page: Number(page), sort });
+  const params = { q, status, sort };
 
   return (
     <div className="max-w-6xl">
@@ -38,8 +40,13 @@ export default async function OrdersPage({
         <table className="w-full text-sm min-w-[720px]">
           <thead>
             <tr className="text-left text-faint border-b border-line text-xs uppercase tracking-wide [&>th]:px-4 [&>th]:py-2.5 [&>th]:font-medium">
-              <th>Number</th><th>Date</th><th>Customer</th><th>Category</th><th>Delivery</th>
-              <th className="text-right">Value</th><th>Status</th>
+              <th><SortLink basePath="/orders" params={params} col="number" label="Number" /></th>
+              <th><SortLink basePath="/orders" params={params} col="date" label="Date" /></th>
+              <th><SortLink basePath="/orders" params={params} col="customer" label="Customer" /></th>
+              <th>Category</th>
+              <th><SortLink basePath="/orders" params={params} col="delivery" label="Delivery" /></th>
+              <th className="text-right"><SortLink basePath="/orders" params={params} col="value" label="Value" align="right" /></th>
+              <th>Status</th>
             </tr>
           </thead>
           <tbody>
@@ -68,6 +75,7 @@ export default async function OrdersPage({
           </tbody>
         </table>
       </div>
+      <Pagination basePath="/orders" params={params} page={current} pageSize={pageSize} total={total} />
     </div>
   );
 }

@@ -40,3 +40,22 @@ export function buildWhatsappLink(opts: {
   const text = fill(opts.settings.template, { name: opts.name, product: opts.product, number: opts.settings.whatsappNumber });
   return `https://wa.me/${to}?text=${encodeURIComponent(text)}`;
 }
+
+/** A polite payment-reminder wa.me link for an overdue invoice. Returns null if the phone is unusable. */
+export function buildPaymentReminderLink(opts: {
+  phone?: string | null;
+  customerName?: string | null;
+  invoiceNumber: string;
+  outstanding: number;
+  companyNumber?: string;
+}): string | null {
+  const to = normalizeWaNumber(opts.phone);
+  if (!to) return null;
+  const amount = new Intl.NumberFormat('en-IN', { maximumFractionDigits: 2 }).format(opts.outstanding);
+  const name = (opts.customerName ?? '').trim() || 'Sir/Madam';
+  const text =
+    `Namaste ${name}, a gentle reminder from M/s M.S. Enterprises: invoice ${opts.invoiceNumber} for ₹${amount} ` +
+    `is now due for payment. Kindly arrange it at your convenience. For any query, reach us on ` +
+    `${opts.companyNumber || DEFAULT_WHATSAPP_NUMBER}. Thank you. — Team M.S. Enterprises`;
+  return `https://wa.me/${to}?text=${encodeURIComponent(text)}`;
+}

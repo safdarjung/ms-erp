@@ -6,7 +6,7 @@ import { requireUser, can } from '@/lib/rbac';
 import { formatDate } from '@/lib/format';
 import { StatusPill } from '@/components/status-pill';
 import { ConfirmButton } from '@/components/confirm-button';
-import { convertToInvoiceAction, convertToOrderAction } from '../actions';
+import { convertToInvoiceAction, convertToOrderAction, duplicateQuotationAction } from '../actions';
 import { QuotationStatusSelect } from '../status-select';
 
 export const metadata = { title: 'Quotation' };
@@ -38,6 +38,12 @@ export default async function QuotationDetail({ params }: { params: Promise<{ id
           )}
           <a href={`/print/quotation/${q.id}`} target="_blank" rel="noreferrer" className="btn-ghost">Preview</a>
           <a href={`/print/quotation/${q.id}?print=1`} target="_blank" rel="noreferrer" className="btn-ghost">Print / PDF</a>
+          {can(user, 'quotation.create') && (
+            <form action={duplicateQuotationAction}>
+              <input type="hidden" name="id" value={q.id} />
+              <button type="submit" className="btn-ghost">Duplicate</button>
+            </form>
+          )}
           {converted ? (
             <Link href={`/invoices/${q.convertedInvoiceId}`} className="btn-primary">View invoice →</Link>
           ) : ordered ? (

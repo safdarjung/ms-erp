@@ -351,3 +351,61 @@ export async function convertQuotationTx(
   await tx.update(quotation).set({ status: 'converted', convertedInvoiceId: inv!.id }).where(eq(quotation.id, q.id));
   return { invoiceId: inv!.id, number, existing: false };
 }
+
+// ── Duplicate (re-issue a repeat job) ───────────────────────────────────────
+
+/** Duplicate a quotation into a fresh draft: new number + today's date, same customer,
+ *  totals copied verbatim (no recompute) and all line items cloned. */
+export async function duplicateQuotationTx(
+  tx: Tx, u: U, sourceId: string,
+): Promise<{ id: string; number: string }> {
+  const [q] = await tx.select().from(quotation).where(eq(quotation.id, sourceId)).limit(1);
+  if (!q) throw new Error('Quotation not found');
+
+  const qitems = await tx.select().from(quotationItem)
+    .where(eq(quotationItem.quotationId, sourceId)).orderBy(quotationItem.seq);
+  const when = new Date();
+  const number = await issueDocNumber(tx, u.tenantId, 'quotation', when);
+
+  const [dup] = await tx.insert(quotation).values({
+    tenantId: u.tenantId, number, docDate: when, customerId: q.customerId,
+    placeOfSupply: q.placeOfSupply, isInterstate: q.isInterstate, status: 'draft', validityDays: q.validityDays,
+    subtotal: q.subtotal, cgst: q.cgst, sgst: q.sgst, igst: q.igst, grandTotal: q.grandTotal,
+    terms: q.terms, notes: q.notes, createdBy: u.userId,
+  }).returning({ id: quotation.id });
+
+  await tx.insert(quotationItem).values(qitems.map((it) => ({
+    tenantId: u.tenantId, quotationId: dup!.id, seq: it.seq, description: it.description, hsn: it.hsn,
+    qty: it.qty, uom: it.uom, rate: it.rate, gstRate: it.gstRate,
+    taxableValue: it.taxableValue, isToolingCharge: it.isToolingCharge,
+  })));
+
+  return { id: dup!.id, number };
+}
+
+/** Duplicate a sales order into a fresh open order: new number + today's date, same customer
+ *  and terms, no delivery date, all line items cloned. */
+export async function duplicateOrderTx(
+  tx: Tx, u: U, sourceId: string,
+): Promise<{ id: string; number: string }> {
+  const [o] = await tx.select().from(salesOrder).where(eq(salesOrder.id, sourceId)).limit(1);
+  if (!o) throw new Error('Order not found');
+
+  const oitems = await tx.select().from(orderItem)
+    .where(eq(orderItem.orderId, sourceId)).orderBy(orderItem.seq);
+  const when = new Date();
+  const number = await issueDocNumber(tx, u.tenantId, 'order', when);
+
+  const [dup] = await tx.insert(salesOrder).values({
+    tenantId: u.tenantId, number, docDate: when, customerId: o.customerId,
+    poRef: o.poRef, orderCategory: o.orderCategory, materialOwnership: o.materialOwnership, status: 'open',
+    totalValue: o.totalValue, createdBy: u.userId,
+  }).returning({ id: salesOrder.id });
+
+  await tx.insert(orderItem).values(oitems.map((it) => ({
+    tenantId: u.tenantId, orderId: dup!.id, seq: it.seq, description: it.description, hsn: it.hsn,
+    qty: it.qty, uom: it.uom, rate: it.rate, gstRate: it.gstRate, taxableValue: it.taxableValue,
+  })));
+
+  return { id: dup!.id, number };
+}

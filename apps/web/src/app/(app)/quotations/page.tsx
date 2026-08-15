@@ -4,6 +4,8 @@ import { requireUser, can } from '@/lib/rbac';
 import { listQuotations } from '@/lib/queries';
 import { formatDate } from '@/lib/format';
 import { FilterBar } from '@/components/filter-bar';
+import { Pagination, SortLink } from '@/components/pagination';
+import { ExportLink } from '@/components/export-link';
 import { StatusPill } from '@/components/status-pill';
 
 export const metadata = { title: 'Quotations' };
@@ -11,18 +13,24 @@ export const metadata = { title: 'Quotations' };
 export default async function QuotationsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string; status?: string }>;
+  searchParams: Promise<{ q?: string; status?: string; page?: string; sort?: string }>;
 }) {
-  const { q, status } = await searchParams;
+  const { q, status, page, sort } = await searchParams;
   const user = await requireUser();
-  const rows = await listQuotations(q, status);
+  const { rows, total, page: current, pageSize } = await listQuotations({ q, status, page: Number(page), sort });
+  const params = { q, status, sort };
+  const exportQs = new URLSearchParams({ ...(q ? { q } : {}), ...(status ? { status } : {}) }).toString();
+  const exportHref = `/export/quotations${exportQs ? `?${exportQs}` : ''}`;
 
   return (
     <div className="max-w-5xl">
       <p className="eyebrow">Sales</p>
       <div className="flex items-center justify-between mb-5">
         <h1 className="text-2xl font-semibold tracking-tight">Quotations</h1>
-        {can(user, 'quotation.create') && <Link href="/quotations/new" className="btn-primary">+ New quotation</Link>}
+        <div className="flex items-center gap-2">
+          <ExportLink href={exportHref} />
+          {can(user, 'quotation.create') && <Link href="/quotations/new" className="btn-primary">+ New quotation</Link>}
+        </div>
       </div>
 
       <FilterBar
@@ -38,7 +46,11 @@ export default async function QuotationsPage({
         <table className="w-full text-sm min-w-[640px]">
           <thead>
             <tr className="text-left text-faint border-b border-line text-xs uppercase tracking-wide [&>th]:px-4 [&>th]:py-2.5 [&>th]:font-medium">
-              <th>Number</th><th>Date</th><th>Customer</th><th className="text-right">Total</th><th>Status</th><th></th>
+              <th><SortLink basePath="/quotations" params={params} col="number" label="Number" /></th>
+              <th><SortLink basePath="/quotations" params={params} col="date" label="Date" /></th>
+              <th><SortLink basePath="/quotations" params={params} col="customer" label="Customer" /></th>
+              <th className="text-right"><SortLink basePath="/quotations" params={params} col="total" label="Total" align="right" /></th>
+              <th>Status</th><th></th>
             </tr>
           </thead>
           <tbody>
@@ -63,6 +75,7 @@ export default async function QuotationsPage({
           </tbody>
         </table>
       </div>
+      <Pagination basePath="/quotations" params={params} page={current} pageSize={pageSize} total={total} />
     </div>
   );
 }

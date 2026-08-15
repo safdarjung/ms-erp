@@ -4,7 +4,7 @@ import { revalidatePath } from 'next/cache';
 import { quotationInput, QUOTATION_SETTABLE_STATUSES } from '@ms/core';
 import { withTenant, quotation, eq } from '@ms/db';
 import { requirePermission } from '@/lib/rbac';
-import { insertQuotationTx, updateQuotationTx, convertQuotationTx, convertQuotationToOrderTx } from '@/lib/documents';
+import { insertQuotationTx, updateQuotationTx, convertQuotationTx, convertQuotationToOrderTx, duplicateQuotationTx } from '@/lib/documents';
 import { toActionError, type ActionResult } from '@/lib/forms';
 
 export type ActionState = { error?: string };
@@ -123,6 +123,21 @@ export async function convertToOrderAction(_prev: ActionResult, formData: FormDa
   }
   if (orderId) redirect(`/orders/${orderId}`);
   return { ok: true };
+}
+
+export async function duplicateQuotationAction(formData: FormData): Promise<void> {
+  let newId: string | undefined;
+  try {
+    const u = await requirePermission('quotation.create');
+    const id = String(formData.get('id') ?? '');
+    if (!id) throw new Error('Missing quotation');
+    const res = await withTenant(u.tenantId, u.userId, (tx) => duplicateQuotationTx(tx, u, id));
+    newId = res.id;
+    revalidatePath('/quotations');
+  } catch (e) {
+    throw new Error(toActionError(e));
+  }
+  if (newId) redirect(`/quotations/${newId}/edit`);
 }
 
 export async function convertToInvoiceAction(_prev: ActionResult, formData: FormData): Promise<ActionResult> {

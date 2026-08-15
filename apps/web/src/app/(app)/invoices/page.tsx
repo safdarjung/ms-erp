@@ -4,6 +4,8 @@ import { requireUser, can } from '@/lib/rbac';
 import { listInvoices } from '@/lib/queries';
 import { formatDate } from '@/lib/format';
 import { FilterBar } from '@/components/filter-bar';
+import { Pagination, SortLink } from '@/components/pagination';
+import { ExportLink } from '@/components/export-link';
 import { StatusPill } from '@/components/status-pill';
 
 export const metadata = { title: 'Invoices' };
@@ -11,11 +13,13 @@ export const metadata = { title: 'Invoices' };
 export default async function InvoicesPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string }>;
+  searchParams: Promise<{ q?: string; status?: string; page?: string; sort?: string }>;
 }) {
-  const { q } = await searchParams;
+  const { q, status, page, sort } = await searchParams;
   const user = await requireUser();
-  const rows = await listInvoices(q);
+  const { rows, total, page: current, pageSize } = await listInvoices({ q, status, page: Number(page), sort });
+  const params = { q, status, sort };
+  const exportHref = `/export/invoices${q ? `?q=${encodeURIComponent(q)}` : ''}`;
 
   const outstandingTotal = rows.reduce((s, r) => {
     const ps = paymentStatus({ status: r.status, grandTotal: Number(r.grandTotal), received: Number(r.received), dueDate: r.dueDate });
@@ -30,7 +34,10 @@ export default async function InvoicesPage({
           <h1 className="text-2xl font-semibold tracking-tight">GST Invoices</h1>
           {outstandingTotal > 0.5 && <p className="text-sm text-muted mt-0.5">{formatINR(outstandingTotal)} outstanding across shown invoices</p>}
         </div>
-        {can(user, 'invoice.create') && <Link href="/invoices/new" className="btn-primary">+ New invoice</Link>}
+        <div className="flex items-center gap-2">
+          <ExportLink href={exportHref} />
+          {can(user, 'invoice.create') && <Link href="/invoices/new" className="btn-primary">+ New invoice</Link>}
+        </div>
       </div>
 
       <FilterBar basePath="/invoices" q={q} placeholder="Search number or customer…" />
@@ -39,8 +46,11 @@ export default async function InvoicesPage({
         <table className="w-full text-sm min-w-[720px]">
           <thead>
             <tr className="text-left text-faint border-b border-line text-xs uppercase tracking-wide [&>th]:px-4 [&>th]:py-2.5 [&>th]:font-medium">
-              <th>Number</th><th>Date</th><th>Customer</th>
-              <th className="text-right">Total</th><th className="text-right">Outstanding</th><th>Payment</th><th></th>
+              <th><SortLink basePath="/invoices" params={params} col="number" label="Number" /></th>
+              <th><SortLink basePath="/invoices" params={params} col="date" label="Date" /></th>
+              <th><SortLink basePath="/invoices" params={params} col="customer" label="Customer" /></th>
+              <th className="text-right"><SortLink basePath="/invoices" params={params} col="total" label="Total" align="right" /></th>
+              <th className="text-right">Outstanding</th><th>Payment</th><th></th>
             </tr>
           </thead>
           <tbody>
@@ -70,6 +80,7 @@ export default async function InvoicesPage({
           </tbody>
         </table>
       </div>
+      <Pagination basePath="/invoices" params={params} page={current} pageSize={pageSize} total={total} />
     </div>
   );
 }

@@ -56,6 +56,27 @@ const TOOLS: Anthropic.Messages.ToolUnion[] = [
   ...ACTION_TOOLS.map(toAnthropicTool),
 ];
 
+// Anthropic image blocks accept these media types; PDFs go in a document block.
+// (heic/heif are read by Gemini but not Claude — noted as text on the Claude path.)
+const CLAUDE_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
+
+/** Build Anthropic content blocks (text + image/document) for a turn with attachments. */
+function claudeBlocksFor(t: ChatTurn): Anthropic.Messages.ContentBlockParam[] {
+  const blocks: Anthropic.Messages.ContentBlockParam[] = [];
+  if (t.content.trim()) blocks.push({ type: 'text', text: t.content });
+  for (const a of t.attachments ?? []) {
+    if (a.mimeType === 'application/pdf') {
+      blocks.push({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: a.data } });
+    } else if (CLAUDE_IMAGE_TYPES.has(a.mimeType)) {
+      blocks.push({ type: 'image', source: { type: 'base64', media_type: a.mimeType as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp', data: a.data } });
+    } else {
+      blocks.push({ type: 'text', text: `[attached ${a.name ?? 'file'} — ${a.mimeType} is not supported by this model]` });
+    }
+  }
+  if (!blocks.length) blocks.push({ type: 'text', text: t.content || '(empty)' });
+  return blocks;
+}
+
 /**
  * The ask-your-data agent (docs/05 §2): stream the answer, executing guarded
  * analytics queries and chart presentations as requested. Dispatches to the
@@ -85,14 +106,16 @@ async function* runClaudeAssistant(
     {
       type: 'text',
       text: `Today is ${ctx.today}. Business: ${ctx.tenantName}. You are talking to ${ctx.userName}. ` +
-        `Their permissions: ${[...ctx.permissions].sort().join(', ') || '(none)'}.`,
+        `Their permissions: ${[...ctx.permissions].sort().join(', ') || '(none)'}.` +
+        (ctx.pageContext ? `\nCurrent page: ${ctx.pageContext}` : ''),
     },
   ];
 
-  const messages: Anthropic.Messages.MessageParam[] = history.map((t) => ({
-    role: t.role,
-    content: t.content,
-  }));
+  const messages: Anthropic.Messages.MessageParam[] = history.map((t) =>
+    t.role === 'user' && t.attachments?.length
+      ? { role: 'user', content: claudeBlocksFor(t) }
+      : { role: t.role, content: t.content },
+  );
 
   const state: TurnState = { chartShown: false, actionPending: false };
 

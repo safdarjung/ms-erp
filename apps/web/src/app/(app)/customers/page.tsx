@@ -2,6 +2,8 @@ import Link from 'next/link';
 import { listCustomers } from '@/lib/queries';
 import { requireUser, can } from '@/lib/rbac';
 import { FilterBar } from '@/components/filter-bar';
+import { Pagination, SortLink } from '@/components/pagination';
+import { ExportLink } from '@/components/export-link';
 import { ConfirmButton } from '@/components/confirm-button';
 import { StatusPill } from '@/components/status-pill';
 import { CustomerForm } from './customer-form';
@@ -12,17 +14,22 @@ export const metadata = { title: 'Customers' };
 export default async function CustomersPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string }>;
+  searchParams: Promise<{ q?: string; page?: string; sort?: string }>;
 }) {
-  const { q } = await searchParams;
+  const { q, page, sort } = await searchParams;
   const user = await requireUser();
-  const rows = await listCustomers(q);
+  const { rows, total, page: current, pageSize } = await listCustomers({ q, page: Number(page), sort });
   const canDelete = can(user, 'customer.delete');
+  const params = { q, sort };
+  const exportHref = `/export/customers${q ? `?q=${encodeURIComponent(q)}` : ''}`;
 
   return (
     <div className="max-w-5xl">
       <p className="eyebrow">CRM</p>
-      <h1 className="text-2xl font-semibold tracking-tight mb-5">Customers</h1>
+      <div className="flex items-center justify-between gap-3 mb-5">
+        <h1 className="text-2xl font-semibold tracking-tight">Customers</h1>
+        <ExportLink href={exportHref} />
+      </div>
 
       {can(user, 'customer.create') && (
         <details className="reveal card mb-5">
@@ -39,8 +46,10 @@ export default async function CustomersPage({
         <table className="w-full text-sm min-w-[640px]">
           <thead>
             <tr className="text-left text-faint border-b border-line text-xs uppercase tracking-wide [&>th]:px-4 [&>th]:py-2.5 [&>th]:font-medium">
-              <th>Name</th><th>GSTIN</th><th>State</th><th>Contact</th><th>Phone</th>
-              <th className="text-right">Credit</th>{canDelete && <th></th>}
+              <th><SortLink basePath="/customers" params={params} col="name" label="Name" /></th>
+              <th>GSTIN</th><th>State</th><th>Contact</th><th>Phone</th>
+              <th className="text-right"><SortLink basePath="/customers" params={params} col="credit" label="Credit" align="right" /></th>
+              {canDelete && <th></th>}
             </tr>
           </thead>
           <tbody>
@@ -83,6 +92,7 @@ export default async function CustomersPage({
           </tbody>
         </table>
       </div>
+      <Pagination basePath="/customers" params={params} page={current} pageSize={pageSize} total={total} />
     </div>
   );
 }

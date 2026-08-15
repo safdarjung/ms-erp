@@ -4,6 +4,7 @@ import { usePathname } from 'next/navigation';
 import { useEffect, useState, type ReactNode } from 'react';
 import { logoutAction } from '@/app/login/actions';
 import { AssistantPanel, openAssistant } from '@/components/assistant/assistant-panel';
+import { KeyboardShortcuts } from '@/components/keyboard-shortcuts';
 
 function Icon({ name }: { name: string }) {
   const paths: Record<string, ReactNode> = {
@@ -204,6 +205,7 @@ export function AppShell({
       </div>
 
       <AssistantPanel enabled={aiEnabled} />
+      <KeyboardShortcuts />
     </div>
   );
 }
