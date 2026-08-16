@@ -13,7 +13,8 @@ import { AI_MODELS, addUsage, emptyUsage, type TokenUsage } from './models';
 
 export const quoteDraftSchema = z.object({
   items: z.array(z.object({
-    description: z.string().describe('Line item description as it should appear on the quotation'),
+    description: z.string().describe('Line item description as it should appear on the quotation, e.g. "Blanking die"'),
+    groupLabel: z.string().describe('The part / part-number this line belongs to, e.g. "30017AW1002". Use the SAME value for every die of the same part so they group under it, and keep a part\'s lines together. Empty string for a standalone line with no part.'),
     hsn: z.string().describe('HSN/SAC code, empty string if unsure'),
     qty: z.number().describe('Quantity'),
     uom: z.string().describe('Unit of measure, e.g. NOS, SET, KG, HRS'),
@@ -21,7 +22,7 @@ export const quoteDraftSchema = z.object({
     gstRate: z.number().describe('GST percentage, usually 18'),
     isToolingCharge: z.boolean().describe('True for one-time tooling / NRE charges'),
     basis: z.string().describe('One short line on how the rate was arrived at'),
-  })).describe('Proposed quotation line items (1–15)'),
+  })).describe('Proposed quotation line items (1–40)'),
   termsSuggestion: z.array(z.string()).describe('Suggested terms & conditions lines (delivery, payment, validity, taxes)'),
   assumptions: z.array(z.string()).describe('Assumptions made (material grade, cycle time basis, scrap %, etc.)'),
   flags: z.array(z.string()).describe('Anomalies the reviewer should check, e.g. "well below last quoted rate for a similar part"'),
@@ -40,6 +41,7 @@ const GEMINI_DRAFT_SCHEMA: Schema = {
         type: Type.OBJECT,
         properties: {
           description: { type: Type.STRING },
+          groupLabel: { type: Type.STRING, description: 'The part / part-number this line belongs to (e.g. "30017AW1002"). Same value for every die of the same part; keep a part\'s lines together. Empty string if the line has no part.' },
           hsn: { type: Type.STRING, description: 'HSN/SAC code, empty string if unsure' },
           qty: { type: Type.NUMBER },
           uom: { type: Type.STRING, description: 'NOS, SET, KG, HRS…' },
@@ -48,7 +50,7 @@ const GEMINI_DRAFT_SCHEMA: Schema = {
           isToolingCharge: { type: Type.BOOLEAN },
           basis: { type: Type.STRING, description: 'How the rate was arrived at' },
         },
-        required: ['description', 'hsn', 'qty', 'uom', 'rate', 'gstRate', 'isToolingCharge', 'basis'],
+        required: ['description', 'groupLabel', 'hsn', 'qty', 'uom', 'rate', 'gstRate', 'isToolingCharge', 'basis'],
       },
     },
     termsSuggestion: { type: Type.ARRAY, items: { type: Type.STRING } },
@@ -70,6 +72,7 @@ You draft quotation line items from an enquiry. A human reviews and edits everyt
 
 Rules:
 - Break the work into clear, quotable line items (the part(s), and a separate one-time tooling/NRE line where applicable, marked isToolingCharge).
+- GROUPING BY PART (important): when the enquiry lists several parts, each with multiple dies/tools and a price per die — e.g. "part 30017AW1002: blanking die 30000, bending die 16000; part 41928: blanking & punching die 55000, bending die 20000" — make EACH die its own line with its own rate, set that line's groupLabel to the part number/name ("30017AW1002", "41928", …), and keep all the lines of one part together. The quotation then shows each part as a heading with its dies and a subtotal. If there is only one part or none, leave groupLabel empty.
 - Propose realistic INR unit rates (ex-GST). Anchor on the shop's recent quoted rates for similar work when history is provided; otherwise use sound estimating judgment for the Indian tooling market and say so in assumptions.
 - HSN/SAC: use what history shows for similar items; common codes here — 8207 (interchangeable tools/dies), 8480 (moulds), 7325/7326 (steel articles), SAC 9988 (job work / machining services). Empty string if genuinely unsure.
 - GST is normally 18 for this shop's work; job work for registered manufacturers can be 12 — flag it if you choose 12.
@@ -82,13 +85,14 @@ Rules:
 
 /** Belt-and-braces clamp — structured outputs can't enforce ranges. */
 function clampDraft(draft: QuoteDraft): QuoteDraft {
-  draft.items = draft.items.slice(0, 15).map((it) => ({
+  draft.items = draft.items.slice(0, 40).map((it) => ({
     ...it,
     qty: Math.max(0.001, Number(it.qty) || 1),
     rate: Math.max(0, Number(it.rate) || 0),
     gstRate: [0, 5, 12, 18, 28].includes(it.gstRate) ? it.gstRate : 18,
     uom: (it.uom || 'NOS').toUpperCase().slice(0, 10),
     hsn: (it.hsn || '').slice(0, 10),
+    groupLabel: (it.groupLabel || '').slice(0, 120),
   }));
   return draft;
 }
