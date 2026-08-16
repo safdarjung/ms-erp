@@ -5,6 +5,7 @@
 // this file only PRESENTS stored values — it never recomputes legal numbers.
 
 export type TaxLine = { label: string; amount: number };
+export type DocColumn = { id: string; label: string };
 export type DocItem = {
   description: string;
   hsn: string;
@@ -14,6 +15,10 @@ export type DocItem = {
   /** Line taxable value as stored (qty × rate, rounded once upstream). */
   amount: number;
   isTooling?: boolean;
+  /** Part/section heading this row sits under (blank = ungrouped). */
+  groupLabel?: string;
+  /** Custom-column values keyed by DocColumn.id. */
+  attributes?: Record<string, string>;
 };
 
 export type DocumentData = {
@@ -34,6 +39,8 @@ export type DocumentData = {
   number: string;
   /** Right-hand meta rows: Date, PO Ref, Place of Supply, Validity… */
   meta: { label: string; value: string }[];
+  /** User-defined descriptive columns (rendered between Description and HSN). */
+  columns?: DocColumn[];
   items: DocItem[];
   totals: {
     subtotal: number;
@@ -70,16 +77,68 @@ const esc = (s: string) =>
 const multiline = (s: string) => esc(s).replace(/\r?\n/g, '<br>');
 
 export function renderDocumentHTML(d: DocumentData): string {
-  const itemRows = d.items.map((it, i) => `
+  const cols = d.columns ?? [];
+  const K = cols.length;
+  // Columns: S.No | Description | …custom | HSN | Qty | UOM | Rate | Amount.
+  const NCOL = 7 + K;
+
+  // Column widths (%). Fixed for the numeric/code columns; Description + custom
+  // columns share the remainder, Description weighted 2× so it stays widest.
+  const fixed = { sno: 5, hsn: 9, qty: 6, uom: 6, rate: 11, amount: 12 };
+  const flex = 100 - (fixed.sno + fixed.hsn + fixed.qty + fixed.uom + fixed.rate + fixed.amount);
+  const descW = (flex * 2) / (2 + K);
+  const custW = K ? flex / (2 + K) : 0;
+  const colgroupHtml = [
+    `<col style="width:${fixed.sno}%">`,
+    `<col style="width:${descW.toFixed(2)}%">`,
+    ...cols.map(() => `<col style="width:${custW.toFixed(2)}%">`),
+    `<col style="width:${fixed.hsn}%">`,
+    `<col style="width:${fixed.qty}%">`,
+    `<col style="width:${fixed.uom}%">`,
+    `<col style="width:${fixed.rate}%">`,
+    `<col style="width:${fixed.amount}%">`,
+  ].join('');
+
+  const theadHtml = `<th>S.No</th><th>Description</th>${
+    cols.map((c) => `<th>${esc(c.label)}</th>`).join('')
+  }<th>HSN/SAC</th><th>Qty</th><th>UOM</th><th>Rate (₹)</th><th>Amount (₹)</th>`;
+
+  const renderRow = (it: DocItem, sn: number) => `
       <tr>
-        <td class="c">${i + 1}</td>
+        <td class="c">${sn}</td>
         <td class="desc">${multiline(it.description)}${it.isTooling ? '<div class="sub">One-time tooling / NRE charge</div>' : ''}</td>
+        ${cols.map((c) => `<td class="c">${esc(it.attributes?.[c.id] ?? '')}</td>`).join('')}
         <td class="c mono">${esc(it.hsn)}</td>
         <td class="r">${qty(it.qty)}</td>
         <td class="c">${esc(it.uom)}</td>
         <td class="r">${inr(it.rate)}</td>
         <td class="r">${inr(it.amount)}</td>
-      </tr>`).join('');
+      </tr>`;
+
+  // Split into consecutive same-group segments; grouped segments get a heading
+  // row + a subtotal row, ungrouped rows render bare. S.No stays continuous.
+  type Seg = { group: string; items: DocItem[] };
+  const segments: Seg[] = [];
+  for (const it of d.items) {
+    const g = (it.groupLabel ?? '').trim();
+    const last = segments[segments.length - 1];
+    if (last && last.group === g) last.items.push(it);
+    else segments.push({ group: g, items: [it] });
+  }
+
+  let sn = 0;
+  const itemRows = segments.map((seg) => {
+    const body = seg.items.map((it) => renderRow(it, (sn += 1))).join('');
+    if (!seg.group) return body;
+    const sub = seg.items.reduce((s, it) => s + it.amount, 0);
+    const header = `
+      <tr class="grouphdr"><td class="ghead" colspan="${NCOL}">${esc(seg.group)}</td></tr>`;
+    const subtotal = `
+      <tr class="subtot"><td class="subl" colspan="${NCOL - 1}">Subtotal — ${esc(seg.group)}</td><td class="subv">${inr(sub)}</td></tr>`;
+    return header + body + subtotal;
+  }).join('');
+
+  const fillCells = '<td></td>'.repeat(NCOL);
 
   const totalRows: { label: string; value: string; cls?: string }[] = [
     { label: 'Taxable Value', value: inr(d.totals.subtotal) },
@@ -162,6 +221,14 @@ export function renderDocumentHTML(d: DocumentData): string {
   .mono { font-family: 'Courier New', monospace; font-size: 10px; }
   .desc { line-height: 1.5; }
   .desc .sub { font-style: italic; font-size: 9px; color: #444; margin-top: 1px; }
+  /* Part grouping */
+  tr.grouphdr td.ghead {
+    background: #e9eef1; font-weight: 700; font-size: 10.5px; letter-spacing: .3px; padding: 6px 8px;
+  }
+  tr.grouphdr td.ghead::before { content: "▸ "; color: #1c8ea8; }
+  tr.subtot td { background: #f7f9fa; font-weight: 600; }
+  tr.subtot .subl { text-align: right; color: #333; }
+  tr.subtot .subv { text-align: right; font-variant-numeric: tabular-nums; }
   tr.fill td { height: 100%; border-top: none; border-bottom: none; }
   tr.fill td:first-child { min-height: 18mm; }
 
@@ -222,20 +289,15 @@ export function renderDocumentHTML(d: DocumentData): string {
 
   <div class="grow">
     <table class="items">
-      <colgroup>
-        <col style="width:6%"><col style="width:40%"><col style="width:11%">
-        <col style="width:8%"><col style="width:7%"><col style="width:13%"><col style="width:15%">
-      </colgroup>
+      <colgroup>${colgroupHtml}</colgroup>
       <thead>
-        <tr>
-          <th>S.No</th><th>Description</th><th>HSN/SAC</th><th>Qty</th><th>UOM</th><th>Rate (₹)</th><th>Amount (₹)</th>
-        </tr>
+        <tr>${theadHtml}</tr>
       </thead>
       <tbody>
         ${itemRows}
-        <tr class="fill"><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+        <tr class="fill">${fillCells}</tr>
         <tr>
-          <td class="words" colspan="4" rowspan="${totalRows.length}">
+          <td class="words" colspan="${NCOL - 3}" rowspan="${totalRows.length}">
             <div class="lab">Amount in words</div>
             <div class="val">${esc(d.totals.words)}</div>
             ${d.notes ? `<div class="notes"><b>Note:</b> ${multiline(d.notes)}</div>` : ''}

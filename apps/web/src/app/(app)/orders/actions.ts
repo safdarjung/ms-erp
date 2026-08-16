@@ -18,6 +18,8 @@ export async function createOrderAction(_prev: ActionState, formData: FormData):
   } catch {
     return { error: 'Invalid line items' };
   }
+  let columnDefs: unknown = [];
+  try { columnDefs = JSON.parse(String(formData.get('columnDefs') ?? '[]')); } catch { columnDefs = []; }
 
   const parsed = orderInput.safeParse({
     customerId: formData.get('customerId'),
@@ -28,6 +30,7 @@ export async function createOrderAction(_prev: ActionState, formData: FormData):
     deliveryDate: formData.get('deliveryDate') || undefined,
     quotationId: formData.get('quotationId') || undefined,
     items,
+    columnDefs,
   });
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? 'Invalid input' };
 

@@ -36,6 +36,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     },
     number: q.number,
     meta,
+    columns: q.columnDefs ?? [],
     items: items.map((i) => ({
       description: i.description,
       hsn: i.hsn ?? '',
@@ -44,6 +45,8 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       rate: Number(i.rate),
       amount: Number(i.taxableValue),
       isTooling: i.isToolingCharge,
+      groupLabel: i.groupLabel ?? undefined,
+      attributes: i.attributes ?? undefined,
     })),
     totals: {
       subtotal: Number(q.subtotal),

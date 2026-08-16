@@ -1,9 +1,9 @@
 'use client';
 import { useActionState, useMemo, useState, useTransition } from 'react';
-import { computeGst, isInterstate, formatINR } from '@ms/core';
+import { computeGst, isInterstate, formatINR, type ColumnDef } from '@ms/core';
 import { SubmitButton } from '@/components/submit-button';
 import { AiPolishButton } from '@/components/ai-polish-button';
-import { LineItemsEditor, emptyRow, type LineRow } from '@/components/line-items-editor';
+import { LineItemsEditor, emptyRow, serializeItems, type LineRow } from '@/components/line-items-editor';
 import { createQuotationAction, updateQuotationAction, type ActionState } from './actions';
 import { draftQuotationItemsAction } from './ai-actions';
 
@@ -11,7 +11,8 @@ type Cust = { id: string; name: string; stateCode: string | null; gstin: string 
 type DraftMeta = { assumptions: string[]; flags: string[]; basis: string[] };
 
 export type QuotationInitial = {
-  customerId: string; docDate: string; validityDays: number; terms: string; notes: string; rows: LineRow[];
+  customerId: string; docDate: string; validityDays: number; terms: string; notes: string;
+  rows: LineRow[]; columnDefs?: ColumnDef[];
 };
 
 function AiDraftCard({
@@ -32,6 +33,7 @@ function AiDraftCard({
       const d = res.draft;
       onDraft(
         d.items.map((it) => ({
+          ...emptyRow(),
           description: it.description, hsn: it.hsn, qty: String(it.qty), uom: it.uom,
           rate: String(it.rate), gstRate: String(it.gstRate), tooling: it.isToolingCharge,
         })),
@@ -87,6 +89,7 @@ export function QuotationForm({
   const [state, action] = useActionState<ActionState, FormData>(mode === 'edit' ? updateQuotationAction : createQuotationAction, {});
   const [customerId, setCustomerId] = useState(initial?.customerId ?? defaultCustomerId);
   const [rows, setRows] = useState<LineRow[]>(initial?.rows?.length ? initial.rows : [emptyRow()]);
+  const [columns, setColumns] = useState<ColumnDef[]>(initial?.columnDefs ?? []);
   const [terms, setTerms] = useState(initial?.terms ?? defaultTerms);
   const [notes, setNotes] = useState(initial?.notes ?? '');
   const [draftMeta, setDraftMeta] = useState<DraftMeta | null>(null);
@@ -96,11 +99,9 @@ export function QuotationForm({
 
   const cust = customers.find((c) => c.id === customerId);
   const interstate = isInterstate(supplierStateCode, cust?.stateCode);
-  const totals = useMemo(
-    () => computeGst(rows.map((r) => ({ qty: r.qty, rate: r.rate, gstRate: r.gstRate })), interstate),
-    [rows, interstate],
-  );
-  const savable = rows.filter((r) => r.description.trim()).length;
+  const items = useMemo(() => serializeItems(rows, columns), [rows, columns]);
+  const totals = useMemo(() => computeGst(items, interstate), [items, interstate]);
+  const savable = items.length;
 
   const applyDraft = (drafted: LineRow[], termsSuggestion: string[], meta: DraftMeta) => {
     setUndoRows(rows.some((r) => r.description.trim()) ? rows : null);
@@ -112,16 +113,13 @@ export function QuotationForm({
     }
   };
 
-  const itemsJson = JSON.stringify(
-    rows.filter((r) => r.description.trim()).map((r) => ({
-      description: r.description, hsn: r.hsn, qty: Number(r.qty) || 0, uom: r.uom,
-      rate: Number(r.rate) || 0, gstRate: Number(r.gstRate) || 0, isToolingCharge: r.tooling,
-    })),
-  );
+  const itemsJson = JSON.stringify(items);
+  const columnDefsJson = JSON.stringify(columns);
 
   return (
     <form action={action} className="flex flex-col gap-5">
       <input type="hidden" name="items" value={itemsJson} />
+      <input type="hidden" name="columnDefs" value={columnDefsJson} />
       {mode === 'edit' && <input type="hidden" name="id" value={quotationId} />}
 
       <div className="card p-4 grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -168,7 +166,7 @@ export function QuotationForm({
         </div>
       )}
 
-      <LineItemsEditor rows={rows} setRows={setRows} tooling />
+      <LineItemsEditor rows={rows} setRows={setRows} columns={columns} setColumns={setColumns} tooling />
 
       <div className="flex flex-col md:flex-row gap-5">
         <div className="flex-1">

@@ -18,6 +18,8 @@ export async function createQuotationAction(_prev: ActionState, formData: FormDa
   } catch {
     return { error: 'Invalid line items' };
   }
+  let columnDefs: unknown = [];
+  try { columnDefs = JSON.parse(String(formData.get('columnDefs') ?? '[]')); } catch { columnDefs = []; }
 
   const parsed = quotationInput.safeParse({
     customerId: formData.get('customerId'),
@@ -26,6 +28,7 @@ export async function createQuotationAction(_prev: ActionState, formData: FormDa
     terms: formData.get('terms') || undefined,
     notes: formData.get('notes') || undefined,
     items,
+    columnDefs,
   });
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? 'Invalid input' };
   const d = parsed.data;
@@ -56,6 +59,8 @@ export async function updateQuotationAction(_prev: ActionState, formData: FormDa
   } catch {
     return { error: 'Invalid line items' };
   }
+  let columnDefs: unknown = [];
+  try { columnDefs = JSON.parse(String(formData.get('columnDefs') ?? '[]')); } catch { columnDefs = []; }
 
   const parsed = quotationInput.safeParse({
     customerId: formData.get('customerId'),
@@ -64,6 +69,7 @@ export async function updateQuotationAction(_prev: ActionState, formData: FormDa
     terms: formData.get('terms') || undefined,
     notes: formData.get('notes') || undefined,
     items,
+    columnDefs,
   });
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? 'Invalid input' };
   const d = parsed.data;
@@ -71,7 +77,8 @@ export async function updateQuotationAction(_prev: ActionState, formData: FormDa
   try {
     await withTenant(u.tenantId, u.userId, (tx) =>
       updateQuotationTx(tx, u, id, {
-        docDate: d.docDate, validityDays: d.validityDays, terms: d.terms, notes: d.notes, items: d.items,
+        docDate: d.docDate, validityDays: d.validityDays, terms: d.terms, notes: d.notes,
+        items: d.items, columnDefs: d.columnDefs,
       }),
     );
   } catch (e) {

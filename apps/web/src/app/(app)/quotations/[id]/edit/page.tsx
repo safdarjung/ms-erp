@@ -3,6 +3,7 @@ import { notFound, redirect } from 'next/navigation';
 import { aiEnabled } from '@ms/ai';
 import { requireUser, can } from '@/lib/rbac';
 import { getQuotation, customersForSelect, getLetterhead } from '@/lib/queries';
+import { rowsFromStored } from '@/components/line-items-editor';
 import { QuotationForm } from '../../quotation-form';
 
 export const metadata = { title: 'Edit quotation' };
@@ -23,10 +24,8 @@ export default async function EditQuotationPage({ params }: { params: Promise<{ 
     validityDays: q.validityDays,
     terms: q.terms ?? '',
     notes: q.notes ?? '',
-    rows: items.map((it) => ({
-      description: it.description, hsn: it.hsn ?? '', qty: String(Number(it.qty)), uom: it.uom,
-      rate: String(Number(it.rate)), gstRate: String(Number(it.gstRate)), tooling: it.isToolingCharge,
-    })),
+    rows: rowsFromStored(items),
+    columnDefs: q.columnDefs ?? [],
   };
 
   return (

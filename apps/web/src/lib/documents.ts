@@ -1,7 +1,7 @@
 import 'server-only';
 import {
   computeGst, isInterstate, parseLetterhead,
-  type InvoiceInput, type QuotationInput, type OrderInput, type PaymentInput, type LeadStage,
+  type InvoiceInput, type QuotationInput, type OrderInput, type PaymentInput, type LeadStage, type ColumnDef,
 } from '@ms/core';
 import {
   customer, lead, quotation, quotationItem, salesOrder, orderItem, taxInvoice, taxInvoiceItem, payment,
@@ -72,13 +72,15 @@ export async function insertQuotationTx(
     tenantId: u.tenantId, number, docDate: when, customerId: d.customerId,
     placeOfSupply: cust.stateCode, isInterstate: interstate, status: 'draft', validityDays: d.validityDays,
     subtotal: String(totals.subtotal), cgst: String(totals.cgst), sgst: String(totals.sgst),
-    igst: String(totals.igst), grandTotal: String(totals.grand), terms: d.terms, notes: d.notes, createdBy: u.userId,
+    igst: String(totals.igst), grandTotal: String(totals.grand), terms: d.terms, notes: d.notes,
+    columnDefs: d.columnDefs ?? [], createdBy: u.userId,
   }).returning({ id: quotation.id });
 
   await tx.insert(quotationItem).values(d.items.map((it, i) => ({
     tenantId: u.tenantId, quotationId: q!.id, seq: i + 1, description: it.description, hsn: it.hsn,
     qty: String(it.qty), uom: it.uom, rate: String(it.rate), gstRate: String(it.gstRate),
     taxableValue: String(r2(it.qty * it.rate)), isToolingCharge: it.isToolingCharge ?? false,
+    groupLabel: it.groupLabel ?? null, attributes: it.attributes ?? {},
   })));
 
   return { id: q!.id, number, grand: totals.grand };
@@ -100,7 +102,7 @@ export async function insertInvoiceTx(
     placeOfSupply: cust.stateCode, isInterstate: interstate,
     subtotal: String(totals.subtotal), cgst: String(totals.cgst), sgst: String(totals.sgst),
     igst: String(totals.igst), grandTotal: String(totals.grand),
-    terms: d.terms, status: 'issued', createdBy: u.userId,
+    terms: d.terms, status: 'issued', columnDefs: d.columnDefs ?? [], createdBy: u.userId,
   }).returning({ id: taxInvoice.id });
 
   await tx.insert(taxInvoiceItem).values(d.items.map((it, i) => ({
@@ -108,6 +110,7 @@ export async function insertInvoiceTx(
     description: it.description, hsn: it.hsn, qty: String(it.qty), uom: it.uom,
     rate: String(it.rate), gstRate: String(it.gstRate),
     taxableValue: String(r2(it.qty * it.rate)),
+    groupLabel: it.groupLabel ?? null, attributes: it.attributes ?? {},
   })));
 
   return { id: inv!.id, number, grand: totals.grand };
@@ -119,10 +122,13 @@ export type DocEdit = {
   poRef?: string;
   terms?: string;
   notes?: string;
+  /** When present, REPLACES this doc's custom column definitions. */
+  columnDefs?: ColumnDef[];
   /** When present, REPLACES all line items; totals recompute deterministically. */
   items?: {
     description: string; hsn?: string; qty: number; uom: string;
     rate: number; gstRate: number; isToolingCharge?: boolean;
+    groupLabel?: string; attributes?: Record<string, string>;
   }[];
 };
 
@@ -139,6 +145,7 @@ export async function updateQuotationTx(
   if (d.validityDays !== undefined) set.validityDays = d.validityDays;
   if (d.terms !== undefined) set.terms = d.terms;
   if (d.notes !== undefined) set.notes = d.notes;
+  if (d.columnDefs !== undefined) set.columnDefs = d.columnDefs;
 
   let grand = Number(q.grandTotal);
   if (d.items) {
@@ -155,6 +162,7 @@ export async function updateQuotationTx(
       tenantId: u.tenantId, quotationId: id, seq: i + 1, description: it.description, hsn: it.hsn,
       qty: String(it.qty), uom: it.uom, rate: String(it.rate), gstRate: String(it.gstRate),
       taxableValue: String(r2(it.qty * it.rate)), isToolingCharge: it.isToolingCharge ?? false,
+      groupLabel: it.groupLabel ?? null, attributes: it.attributes ?? {},
     })));
   }
   await tx.update(quotation).set(set).where(eq(quotation.id, id));
@@ -174,6 +182,7 @@ export async function updateInvoiceTx(
   if (d.poRef !== undefined) set.poRef = d.poRef;
   if (d.terms !== undefined) set.terms = d.terms;
   if (d.notes !== undefined) set.notes = d.notes;
+  if (d.columnDefs !== undefined) set.columnDefs = d.columnDefs;
 
   let grand = Number(inv.grandTotal);
   if (d.items) {
@@ -189,6 +198,7 @@ export async function updateInvoiceTx(
       tenantId: u.tenantId, invoiceId: id, seq: i + 1, description: it.description, hsn: it.hsn,
       qty: String(it.qty), uom: it.uom, rate: String(it.rate), gstRate: String(it.gstRate),
       taxableValue: String(r2(it.qty * it.rate)),
+      groupLabel: it.groupLabel ?? null, attributes: it.attributes ?? {},
     })));
   }
   await tx.update(taxInvoice).set(set).where(eq(taxInvoice.id, id));
@@ -210,13 +220,14 @@ export async function insertOrderTx(
     tenantId: u.tenantId, number, docDate: when, customerId: d.customerId, quotationId: d.quotationId,
     poRef: d.poRef, orderCategory: d.orderCategory, materialOwnership: d.materialOwnership, status: 'open',
     deliveryDate: d.deliveryDate ? new Date(d.deliveryDate) : undefined,
-    totalValue: String(subtotal), createdBy: u.userId,
+    totalValue: String(subtotal), columnDefs: d.columnDefs ?? [], createdBy: u.userId,
   }).returning({ id: salesOrder.id });
 
   await tx.insert(orderItem).values(d.items.map((it, i) => ({
     tenantId: u.tenantId, orderId: o!.id, seq: i + 1, description: it.description, hsn: it.hsn,
     qty: String(it.qty), uom: it.uom, rate: String(it.rate), gstRate: String(it.gstRate),
     taxableValue: String(r2(it.qty * it.rate)),
+    groupLabel: it.groupLabel ?? null, attributes: it.attributes ?? {},
   })));
 
   return { id: o!.id, number, total: subtotal };
@@ -244,12 +255,13 @@ export async function convertQuotationToOrderTx(
     poRef: meta.poRef, orderCategory: meta.orderCategory ?? 'tool_build',
     materialOwnership: meta.materialOwnership ?? 'customer', status: 'open',
     deliveryDate: meta.deliveryDate ? new Date(meta.deliveryDate) : undefined,
-    totalValue: q.subtotal, createdBy: u.userId,
+    totalValue: q.subtotal, columnDefs: q.columnDefs, createdBy: u.userId,
   }).returning({ id: salesOrder.id });
 
   await tx.insert(orderItem).values(qitems.map((it, i) => ({
     tenantId: u.tenantId, orderId: o!.id, seq: i + 1, description: it.description, hsn: it.hsn,
     qty: it.qty, uom: it.uom, rate: it.rate, gstRate: it.gstRate, taxableValue: it.taxableValue,
+    groupLabel: it.groupLabel, attributes: it.attributes,
   })));
 
   await tx.update(quotation).set({ convertedOrderId: o!.id, updatedAt: new Date() }).where(eq(quotation.id, q.id));
@@ -281,12 +293,14 @@ export async function convertOrderToInvoiceTx(
     customerId: o.customerId, quotationId: o.quotationId, orderId: o.id, poRef: o.poRef,
     placeOfSupply: cust.stateCode, isInterstate: interstate,
     subtotal: String(totals.subtotal), cgst: String(totals.cgst), sgst: String(totals.sgst),
-    igst: String(totals.igst), grandTotal: String(totals.grand), status: 'issued', createdBy: u.userId,
+    igst: String(totals.igst), grandTotal: String(totals.grand), status: 'issued',
+    columnDefs: o.columnDefs, createdBy: u.userId,
   }).returning({ id: taxInvoice.id });
 
   await tx.insert(taxInvoiceItem).values(oitems.map((it, i) => ({
     tenantId: u.tenantId, invoiceId: inv!.id, seq: i + 1, description: it.description, hsn: it.hsn,
     qty: it.qty, uom: it.uom, rate: it.rate, gstRate: it.gstRate, taxableValue: it.taxableValue,
+    groupLabel: it.groupLabel, attributes: it.attributes,
   })));
 
   await tx.update(salesOrder).set({ convertedInvoiceId: inv!.id, updatedAt: new Date() }).where(eq(salesOrder.id, o.id));
@@ -340,12 +354,13 @@ export async function convertQuotationTx(
     customerId: q.customerId, quotationId: q.id,
     placeOfSupply: q.placeOfSupply, isInterstate: q.isInterstate,
     subtotal: q.subtotal, cgst: q.cgst, sgst: q.sgst, igst: q.igst, grandTotal: q.grandTotal,
-    terms: q.terms, status: 'issued', createdBy: u.userId,
+    terms: q.terms, status: 'issued', columnDefs: q.columnDefs, createdBy: u.userId,
   }).returning({ id: taxInvoice.id });
 
   await tx.insert(taxInvoiceItem).values(qitems.map((it, i) => ({
     tenantId: u.tenantId, invoiceId: inv!.id, seq: i + 1, description: it.description, hsn: it.hsn,
     qty: it.qty, uom: it.uom, rate: it.rate, gstRate: it.gstRate, taxableValue: it.taxableValue,
+    groupLabel: it.groupLabel, attributes: it.attributes,
   })));
 
   await tx.update(quotation).set({ status: 'converted', convertedInvoiceId: inv!.id }).where(eq(quotation.id, q.id));
@@ -371,13 +386,14 @@ export async function duplicateQuotationTx(
     tenantId: u.tenantId, number, docDate: when, customerId: q.customerId,
     placeOfSupply: q.placeOfSupply, isInterstate: q.isInterstate, status: 'draft', validityDays: q.validityDays,
     subtotal: q.subtotal, cgst: q.cgst, sgst: q.sgst, igst: q.igst, grandTotal: q.grandTotal,
-    terms: q.terms, notes: q.notes, createdBy: u.userId,
+    terms: q.terms, notes: q.notes, columnDefs: q.columnDefs, createdBy: u.userId,
   }).returning({ id: quotation.id });
 
   await tx.insert(quotationItem).values(qitems.map((it) => ({
     tenantId: u.tenantId, quotationId: dup!.id, seq: it.seq, description: it.description, hsn: it.hsn,
     qty: it.qty, uom: it.uom, rate: it.rate, gstRate: it.gstRate,
     taxableValue: it.taxableValue, isToolingCharge: it.isToolingCharge,
+    groupLabel: it.groupLabel, attributes: it.attributes,
   })));
 
   return { id: dup!.id, number };
@@ -399,12 +415,13 @@ export async function duplicateOrderTx(
   const [dup] = await tx.insert(salesOrder).values({
     tenantId: u.tenantId, number, docDate: when, customerId: o.customerId,
     poRef: o.poRef, orderCategory: o.orderCategory, materialOwnership: o.materialOwnership, status: 'open',
-    totalValue: o.totalValue, createdBy: u.userId,
+    totalValue: o.totalValue, columnDefs: o.columnDefs, createdBy: u.userId,
   }).returning({ id: salesOrder.id });
 
   await tx.insert(orderItem).values(oitems.map((it) => ({
     tenantId: u.tenantId, orderId: dup!.id, seq: it.seq, description: it.description, hsn: it.hsn,
     qty: it.qty, uom: it.uom, rate: it.rate, gstRate: it.gstRate, taxableValue: it.taxableValue,
+    groupLabel: it.groupLabel, attributes: it.attributes,
   })));
 
   return { id: dup!.id, number };

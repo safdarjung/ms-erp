@@ -18,6 +18,8 @@ export async function createInvoiceAction(_prev: ActionState, formData: FormData
   } catch {
     return { error: 'Invalid line items' };
   }
+  let columnDefs: unknown = [];
+  try { columnDefs = JSON.parse(String(formData.get('columnDefs') ?? '[]')); } catch { columnDefs = []; }
 
   const parsed = invoiceInput.safeParse({
     customerId: formData.get('customerId'),
@@ -25,6 +27,7 @@ export async function createInvoiceAction(_prev: ActionState, formData: FormData
     poRef: formData.get('poRef') || undefined,
     terms: formData.get('terms') || undefined,
     items,
+    columnDefs,
   });
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? 'Invalid input' };
 

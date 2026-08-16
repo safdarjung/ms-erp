@@ -1,9 +1,9 @@
 'use client';
 import { useActionState, useMemo, useState } from 'react';
-import { computeGst, isInterstate, formatINR } from '@ms/core';
+import { computeGst, isInterstate, formatINR, type ColumnDef } from '@ms/core';
 import { SubmitButton } from '@/components/submit-button';
 import { AiPolishButton } from '@/components/ai-polish-button';
-import { LineItemsEditor, emptyRow, type LineRow } from '@/components/line-items-editor';
+import { LineItemsEditor, emptyRow, serializeItems, type LineRow } from '@/components/line-items-editor';
 import { createInvoiceAction, type ActionState } from './actions';
 
 type Cust = { id: string; name: string; stateCode: string | null; gstin: string | null };
@@ -24,27 +24,23 @@ export function InvoiceForm({
   const [state, action] = useActionState<ActionState, FormData>(createInvoiceAction, {});
   const [customerId, setCustomerId] = useState(defaultCustomerId);
   const [rows, setRows] = useState<LineRow[]>([emptyRow()]);
+  const [columns, setColumns] = useState<ColumnDef[]>([]);
   const [terms, setTerms] = useState(defaultTerms);
   const today = new Date().toISOString().slice(0, 10);
 
   const cust = customers.find((c) => c.id === customerId);
   const interstate = isInterstate(supplierStateCode, cust?.stateCode);
-  const totals = useMemo(
-    () => computeGst(rows.map((r) => ({ qty: r.qty, rate: r.rate, gstRate: r.gstRate })), interstate),
-    [rows, interstate],
-  );
-  const savable = rows.filter((r) => r.description.trim()).length;
+  const items = useMemo(() => serializeItems(rows, columns), [rows, columns]);
+  const totals = useMemo(() => computeGst(items, interstate), [items, interstate]);
+  const savable = items.length;
 
-  const itemsJson = JSON.stringify(
-    rows.filter((r) => r.description.trim()).map((r) => ({
-      description: r.description, hsn: r.hsn, qty: Number(r.qty) || 0, uom: r.uom,
-      rate: Number(r.rate) || 0, gstRate: Number(r.gstRate) || 0,
-    })),
-  );
+  const itemsJson = JSON.stringify(items);
+  const columnDefsJson = JSON.stringify(columns);
 
   return (
     <form action={action} className="flex flex-col gap-5">
       <input type="hidden" name="items" value={itemsJson} />
+      <input type="hidden" name="columnDefs" value={columnDefsJson} />
 
       <div className="card p-4 grid grid-cols-2 md:grid-cols-4 gap-3">
         <div className="col-span-2">
@@ -60,7 +56,7 @@ export function InvoiceForm({
         <div><label className="label">PO ref</label><input name="poRef" className="field" placeholder="optional" /></div>
       </div>
 
-      <LineItemsEditor rows={rows} setRows={setRows} />
+      <LineItemsEditor rows={rows} setRows={setRows} columns={columns} setColumns={setColumns} />
 
       <div className="flex flex-col md:flex-row gap-5">
         <div className="flex-1">
