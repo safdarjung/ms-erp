@@ -17,6 +17,17 @@ export const customerInput = z.object({
 });
 export type CustomerInput = z.infer<typeof customerInput>;
 
+// A user-defined descriptive column on a document's item table (e.g. "Steel
+// grade", "Cavities"). Purely informational — never feeds pricing or tax.
+export const columnDef = z.object({
+  id: z.string().trim().min(1).max(40),
+  label: z.string().trim().min(1, 'Column name is required').max(40),
+});
+export type ColumnDef = z.infer<typeof columnDef>;
+
+// Custom-column values for a single row, keyed by columnDef.id → free text.
+const rowAttributes = z.record(z.string().max(300)).default({});
+
 export const invoiceItemInput = z.object({
   description: z.string().trim().min(1, 'Description is required'),
   hsn: z.string().trim().max(10).optional().or(emptyToUndef),
@@ -24,6 +35,9 @@ export const invoiceItemInput = z.object({
   uom: z.string().trim().max(10).default('NOS'),
   rate: z.coerce.number().min(0),
   gstRate: z.coerce.number().min(0).max(40).default(18),
+  // Optional part/section this row belongs to (NULL/absent = ungrouped).
+  groupLabel: z.string().trim().max(120).optional().or(emptyToUndef),
+  attributes: rowAttributes,
 });
 export type InvoiceItemInput = z.infer<typeof invoiceItemInput>;
 
@@ -33,6 +47,7 @@ export const invoiceInput = z.object({
   poRef: z.string().trim().max(40).optional().or(emptyToUndef),
   terms: z.string().trim().max(4000).optional().or(emptyToUndef),
   items: z.array(invoiceItemInput).min(1, 'Add at least one line item'),
+  columnDefs: z.array(columnDef).max(12).default([]),
 });
 export type InvoiceInput = z.infer<typeof invoiceInput>;
 
@@ -48,6 +63,7 @@ export const quotationInput = z.object({
   terms: z.string().trim().max(4000).optional().or(emptyToUndef),
   notes: z.string().trim().max(2000).optional().or(emptyToUndef),
   items: z.array(quotationItemInput).min(1, 'Add at least one line item'),
+  columnDefs: z.array(columnDef).max(12).default([]),
 });
 export type QuotationInput = z.infer<typeof quotationInput>;
 
@@ -60,6 +76,7 @@ export const orderInput = z.object({
   deliveryDate: z.string().optional().or(emptyToUndef),
   quotationId: z.string().uuid().optional().or(emptyToUndef),
   items: z.array(invoiceItemInput).min(1, 'Add at least one line item'),
+  columnDefs: z.array(columnDef).max(12).default([]),
 });
 export type OrderInput = z.infer<typeof orderInput>;
 
