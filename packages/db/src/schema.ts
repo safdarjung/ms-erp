@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import {
   pgTable, uuid, text, varchar, timestamp, boolean, integer, numeric, jsonb, index, uniqueIndex,
 } from 'drizzle-orm/pg-core';
+import type { ColumnDef } from '@ms/core';
 
 // Standard audit timestamps (fresh builders per table).
 const ts = () => ({
@@ -188,6 +189,8 @@ export const quotation = pgTable('quotation', {
   validityDays: integer('validity_days').notNull().default(15),
   terms: text('terms'),
   notes: text('notes'),
+  // User-defined descriptive columns for this doc's item table: [{ id, label }].
+  columnDefs: jsonb('column_defs').$type<ColumnDef[]>().notNull().default(sql`'[]'::jsonb`),
   convertedOrderId: uuid('converted_order_id'),
   convertedInvoiceId: uuid('converted_invoice_id'),
   createdBy: uuid('created_by'),
@@ -207,6 +210,10 @@ export const quotationItem = pgTable('quotation_item', {
   gstRate: numeric('gst_rate', { precision: 5, scale: 2 }).notNull().default('18'),
   taxableValue: numeric('taxable_value', { precision: 14, scale: 2 }).notNull().default('0'),
   isToolingCharge: boolean('is_tooling_charge').notNull().default(false),
+  // Part / section heading this row sits under (NULL = ungrouped).
+  groupLabel: varchar('group_label', { length: 120 }),
+  // Custom-column values keyed by columnDef.id.
+  attributes: jsonb('attributes').$type<Record<string, string>>().notNull().default(sql`'{}'::jsonb`),
 }, (t) => ({ qIdx: index('quotation_item_q_idx').on(t.quotationId) }));
 
 export const salesOrder = pgTable('sales_order', {
@@ -222,6 +229,7 @@ export const salesOrder = pgTable('sales_order', {
   status: varchar('status', { length: 20 }).notNull().default('open'),
   deliveryDate: timestamp('delivery_date', { withTimezone: true }),
   totalValue: numeric('total_value', { precision: 14, scale: 2 }).notNull().default('0'),
+  columnDefs: jsonb('column_defs').$type<ColumnDef[]>().notNull().default(sql`'[]'::jsonb`),
   convertedInvoiceId: uuid('converted_invoice_id'),
   createdBy: uuid('created_by'),
   ...ts(),
@@ -239,6 +247,8 @@ export const orderItem = pgTable('order_item', {
   rate: numeric('rate', { precision: 14, scale: 2 }).notNull().default('0'),
   gstRate: numeric('gst_rate', { precision: 5, scale: 2 }).notNull().default('18'),
   taxableValue: numeric('taxable_value', { precision: 14, scale: 2 }).notNull().default('0'),
+  groupLabel: varchar('group_label', { length: 120 }),
+  attributes: jsonb('attributes').$type<Record<string, string>>().notNull().default(sql`'{}'::jsonb`),
 }, (t) => ({ oIdx: index('order_item_o_idx').on(t.orderId) }));
 
 export const taxInvoice = pgTable('tax_invoice', {
@@ -269,6 +279,7 @@ export const taxInvoice = pgTable('tax_invoice', {
   status: varchar('status', { length: 20 }).notNull().default('issued'),
   terms: text('terms'),
   notes: text('notes'),
+  columnDefs: jsonb('column_defs').$type<ColumnDef[]>().notNull().default(sql`'[]'::jsonb`),
   createdBy: uuid('created_by'),
   ...ts(),
 }, (t) => ({ tenantIdx: index('tax_invoice_tenant_idx').on(t.tenantId) }));
@@ -337,6 +348,8 @@ export const taxInvoiceItem = pgTable('tax_invoice_item', {
   rate: numeric('rate', { precision: 14, scale: 2 }).notNull().default('0'),
   gstRate: numeric('gst_rate', { precision: 5, scale: 2 }).notNull().default('18'),
   taxableValue: numeric('taxable_value', { precision: 14, scale: 2 }).notNull().default('0'),
+  groupLabel: varchar('group_label', { length: 120 }),
+  attributes: jsonb('attributes').$type<Record<string, string>>().notNull().default(sql`'{}'::jsonb`),
 }, (t) => ({ iIdx: index('tax_invoice_item_i_idx').on(t.invoiceId) }));
 
 // ── Inbound lead capture (email → Lead Inbox) ───────────────────────────────
