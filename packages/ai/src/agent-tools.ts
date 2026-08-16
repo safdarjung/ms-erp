@@ -64,6 +64,19 @@ const ITEM_FIELDS: Record<string, JsonSchemaProp> = {
   uom: { type: 'string', description: 'NOS, SET, KG, HRS…' },
   rate: { type: 'number', description: 'Unit rate in INR, ex-GST' },
   gstRate: { type: 'number', description: 'GST percent — 18 unless the user or history says otherwise' },
+  groupLabel: { type: 'string', description: 'Optional part/section this line belongs to, e.g. "Part 1 — Bracket LH". Rows sharing a label are grouped under it with a subtotal. Omit for ungrouped lines.' },
+  attributes: {
+    type: 'array',
+    description: 'Optional extra descriptive columns for THIS line, as {name,value} pairs, e.g. [{"name":"Steel grade","value":"D2"},{"name":"Cavities","value":"2"}]. Reuse the SAME name across lines so values line up into one column. Descriptive only — never affects price or GST. Use when the user asks for extra columns like material/steel/cavities/drawing no.',
+    items: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Column name — repeat identically across lines that share the column' },
+        value: { type: 'string', description: "This line's value for that column" },
+      },
+      required: ['name', 'value'],
+    },
+  },
 };
 
 const itemsProp = (tooling: boolean): JsonSchemaProp => ({
@@ -145,7 +158,9 @@ export const ACTION_TOOLS: ActionToolDef[] = [
     name: 'create_quotation',
     description:
       'Draft a quotation with line items. You propose descriptions, quantities and ex-GST rates ' +
-      '(anchor on quote history for similar work); the app computes taxable values, CGST/SGST/IGST and totals deterministically.',
+      '(anchor on quote history for similar work); the app computes taxable values, CGST/SGST/IGST and totals deterministically. ' +
+      'For multi-part jobs set each line\'s groupLabel to its part so lines group under a heading with a subtotal; ' +
+      'add per-line attributes {name,value} pairs when the user wants extra descriptive columns (e.g. steel grade, cavities).',
     permission: 'quotation.create',
     properties: {
       customerId: uuid('customer'),

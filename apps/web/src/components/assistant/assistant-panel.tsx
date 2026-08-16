@@ -8,7 +8,8 @@ import { MicButton } from './mic-button';
 type ChartSpec = { title: string; kind: 'bar'; labels: string[]; values: number[] };
 type Cell = string | number | boolean | null;
 type EditField = { key: string; label: string; type: 'text' | 'number' | 'date' | 'textarea' | 'select'; options?: string[] };
-type EditItem = { description: string; hsn?: string; qty: number; uom?: string; rate: number; gstRate: number; isToolingCharge?: boolean };
+type EditItem = { description: string; hsn?: string; qty: number; uom?: string; rate: number; gstRate: number; isToolingCharge?: boolean; groupLabel?: string; attributes?: Record<string, string> };
+type EditColumn = { id: string; label: string };
 type ActionInfo = {
   actionId: string;
   kind: string;
@@ -201,7 +202,9 @@ const PHASE_CHIP: Record<ActionPhase, { label: string; cls: string }> = {
   failed: { label: 'Failed', cls: 'bg-[#f6e5e1] text-crit' },
 };
 
-type CardRow = { description: string; hsn?: string; qty: string; uom?: string; rate: string; gstRate: string; isToolingCharge?: boolean };
+type CardRow = { description: string; hsn?: string; qty: string; uom?: string; rate: string; gstRate: string; isToolingCharge?: boolean; groupLabel?: string; attributes: Record<string, string> };
+let cardColSeq = 0;
+const newCardColId = () => `col_${Date.now().toString(36)}${(cardColSeq++).toString(36)}`;
 
 function ActionCard({
   part,
@@ -228,31 +231,59 @@ function ActionCard({
     for (const fld of a.editable ?? []) f[fld.key] = a.payload?.[fld.key] == null ? '' : String(a.payload[fld.key]);
     return f;
   });
-  const [rows, setRows] = useState<CardRow[]>(() =>
-    (a.editItems ?? []).map((it) => ({
-      description: it.description, hsn: it.hsn, qty: String(it.qty), uom: it.uom,
-      rate: String(it.rate), gstRate: String(it.gstRate), isToolingCharge: it.isToolingCharge,
-    })),
-  );
+  const toRow = (it: EditItem): CardRow => ({
+    description: it.description, hsn: it.hsn, qty: String(it.qty), uom: it.uom,
+    rate: String(it.rate), gstRate: String(it.gstRate), isToolingCharge: it.isToolingCharge,
+    groupLabel: it.groupLabel ?? '', attributes: { ...(it.attributes ?? {}) },
+  });
+  const initialColumns = (): EditColumn[] => {
+    const cd = a.payload?.columnDefs;
+    return Array.isArray(cd) ? cd.map((c) => ({ id: String((c as EditColumn).id), label: String((c as EditColumn).label) })) : [];
+  };
+  const [rows, setRows] = useState<CardRow[]>(() => (a.editItems ?? []).map(toRow));
+  const [columns, setColumns] = useState<EditColumn[]>(initialColumns);
   const updateRow = (i: number, patch: Partial<CardRow>) => setRows((rs) => rs.map((r, x) => (x === i ? { ...r, ...patch } : r)));
+  const setAttr = (i: number, colId: string, val: string) =>
+    setRows((rs) => rs.map((r, x) => (x === i ? { ...r, attributes: { ...r.attributes, [colId]: val } } : r)));
+  const addColumn = () => setColumns((cs) => (cs.length < 12 ? [...cs, { id: newCardColId(), label: `Column ${cs.length + 1}` }] : cs));
+  const renameColumn = (id: string, label: string) => setColumns((cs) => cs.map((c) => (c.id === id ? { ...c, label } : c)));
+  const removeColumn = (id: string) => {
+    setColumns((cs) => cs.filter((c) => c.id !== id));
+    setRows((rs) => rs.map((r) => { const { [id]: _drop, ...rest } = r.attributes; return { ...r, attributes: rest }; }));
+  };
   const hasTooling = (a.editItems ?? []).some((it) => it.isToolingCharge !== undefined);
 
   const discard = () => {
     const f: Record<string, string> = {};
     for (const fld of a.editable ?? []) f[fld.key] = a.payload?.[fld.key] == null ? '' : String(a.payload[fld.key]);
     setForm(f);
-    setRows((a.editItems ?? []).map((it) => ({ description: it.description, hsn: it.hsn, qty: String(it.qty), uom: it.uom, rate: String(it.rate), gstRate: String(it.gstRate), isToolingCharge: it.isToolingCharge })));
+    setRows((a.editItems ?? []).map(toRow));
+    setColumns(initialColumns());
     setEditing(false);
   };
   const submit = () => {
     if (!editing) { onDecide(a.actionId, 'confirm'); return; }
     const edited: Record<string, unknown> = { ...(a.payload ?? {}), ...form };
     if (a.editItems) {
-      edited.items = rows.filter((r) => r.description.trim()).map((r) => ({
-        description: r.description, hsn: r.hsn, qty: Number(r.qty) || 0, uom: r.uom,
-        rate: Number(r.rate) || 0, gstRate: Number(r.gstRate) || 0,
-        ...(hasTooling ? { isToolingCharge: !!r.isToolingCharge } : {}),
-      }));
+      const colIds = new Set(columns.map((c) => c.id));
+      edited.items = rows.filter((r) => r.description.trim()).map((r) => {
+        const attributes: Record<string, string> = {};
+        for (const [k, v] of Object.entries(r.attributes)) if (colIds.has(k) && v.trim()) attributes[k] = v;
+        const gl = (r.groupLabel ?? '').trim();
+        return {
+          description: r.description, hsn: r.hsn, qty: Number(r.qty) || 0, uom: r.uom,
+          rate: Number(r.rate) || 0, gstRate: Number(r.gstRate) || 0,
+          ...(hasTooling ? { isToolingCharge: !!r.isToolingCharge } : {}),
+          ...(gl ? { groupLabel: gl } : {}),
+          attributes,
+        };
+      });
+      // Send columns when the doc has (or had) any — never wipe columns on a plain edit that never touched them.
+      if (columns.length > 0 || Array.isArray(a.payload?.columnDefs)) {
+        edited.columnDefs = columns
+          .map((c) => ({ id: c.id, label: (c.label ?? '').trim() }))
+          .filter((c) => c.label);
+      }
     }
     onDecide(a.actionId, 'confirm', edited);
   };
@@ -312,7 +343,21 @@ function ActionCard({
           </div>
           {a.editItems && (
             <div className="space-y-2">
-              <div className="text-[0.62rem] font-mono uppercase tracking-wider text-faint">Line items</div>
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-[0.62rem] font-mono uppercase tracking-wider text-faint">Line items</div>
+                <button type="button" onClick={addColumn} disabled={columns.length >= 12} className="text-[0.7rem] text-accent disabled:opacity-40">+ Add column</button>
+              </div>
+              {columns.length > 0 && (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-[0.6rem] font-mono uppercase text-faint">Columns</span>
+                  {columns.map((c) => (
+                    <span key={c.id} className="inline-flex items-center gap-1 rounded border border-line bg-surface pl-1.5 pr-0.5 py-0.5">
+                      <input value={c.label} onChange={(e) => renameColumn(c.id, e.target.value)} className="bg-transparent text-[0.7rem] w-20 outline-none" aria-label="Column name" />
+                      <button type="button" onClick={() => removeColumn(c.id)} className="text-crit text-[0.7rem] px-0.5" aria-label="Remove column">✕</button>
+                    </span>
+                  ))}
+                </div>
+              )}
               {rows.map((r, i) => (
                 <div key={i} className="border border-line rounded-lg p-2 space-y-1.5 bg-surface-2/40">
                   <div className="flex items-center justify-between">
@@ -320,6 +365,14 @@ function ActionCard({
                     <button type="button" onClick={() => setRows((rs) => rs.filter((_, x) => x !== i))} className="text-crit text-[0.7rem]">Remove</button>
                   </div>
                   <input value={r.description} onChange={(e) => updateRow(i, { description: e.target.value })} className="field !py-1 text-xs" placeholder="Description" />
+                  <input value={r.groupLabel ?? ''} onChange={(e) => updateRow(i, { groupLabel: e.target.value })} className="field !py-1 text-xs" placeholder="Part / group (optional)" aria-label="Part / group" />
+                  {columns.length > 0 && (
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {columns.map((c) => (
+                        <input key={c.id} value={r.attributes[c.id] ?? ''} onChange={(e) => setAttr(i, c.id, e.target.value)} className="field !py-1 text-xs" placeholder={c.label || 'Value'} aria-label={c.label || 'Column value'} />
+                      ))}
+                    </div>
+                  )}
                   <div className="grid grid-cols-3 gap-1.5">
                     <input value={r.qty} onChange={(e) => updateRow(i, { qty: e.target.value })} className="field !py-1 text-xs" inputMode="decimal" placeholder="Qty" aria-label="Qty" />
                     <input value={r.rate} onChange={(e) => updateRow(i, { rate: e.target.value })} className="field !py-1 text-xs" inputMode="decimal" placeholder="Rate" aria-label="Rate" />
@@ -330,7 +383,7 @@ function ActionCard({
                   )}
                 </div>
               ))}
-              <button type="button" onClick={() => setRows((rs) => [...rs, { description: '', hsn: '84807100', qty: '1', uom: 'NOS', rate: '', gstRate: '18', ...(hasTooling ? { isToolingCharge: false } : {}) }])} className="text-xs text-accent">+ Add line</button>
+              <button type="button" onClick={() => setRows((rs) => [...rs, { description: '', hsn: '84807100', qty: '1', uom: 'NOS', rate: '', gstRate: '18', groupLabel: '', attributes: {}, ...(hasTooling ? { isToolingCharge: false } : {}) }])} className="text-xs text-accent">+ Add line</button>
             </div>
           )}
           <p className="text-[0.7rem] text-faint">Totals &amp; GST are recomputed after you save.</p>

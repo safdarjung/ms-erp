@@ -3,10 +3,10 @@ import { z } from 'zod';
 import { revalidatePath } from 'next/cache';
 import {
   computeGst, isInterstate, formatINR,
-  customerInput, leadInput, quotationInput, invoiceInput, quotationItemInput, invoiceItemInput,
+  customerInput, leadInput, quotationInput, invoiceInput, quotationItemInput, invoiceItemInput, columnDef,
   INVOICE_SETTABLE_STATUSES, LEAD_ACTIVITY_TYPES, LEAD_STAGE_LABELS, LEAD_STAGES, QUOTATION_SETTABLE_STATUSES,
   ORDER_CATEGORIES, MATERIAL_OWNERSHIP, ORDER_SETTABLE_STATUSES, PAYMENT_METHODS, orderInput,
-  type LeadStage,
+  type LeadStage, type ColumnDef,
 } from '@ms/core';
 import {
   withTenant, aiAction, customer, lead, leadActivity, quotation, salesOrder, taxInvoice, payment,
@@ -74,6 +74,7 @@ const updateQuotationDocInput = z.object({
   terms: z.string().trim().max(4000).optional(),
   notes: z.string().trim().max(2000).optional(),
   items: z.array(quotationItemInput).min(1, 'Items must have at least one line').optional(),
+  columnDefs: z.array(columnDef).max(12).optional(),
 });
 const updateInvoiceDocInput = z.object({
   id: uuidField,
@@ -82,6 +83,7 @@ const updateInvoiceDocInput = z.object({
   terms: z.string().trim().max(4000).optional(),
   notes: z.string().trim().max(2000).optional(),
   items: z.array(invoiceItemInput).min(1, 'Items must have at least one line').optional(),
+  columnDefs: z.array(columnDef).max(12).optional(),
 });
 
 const todayIST = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
@@ -96,6 +98,41 @@ function parseOrThrow<S extends z.ZodTypeAny>(schema: S, input: unknown): z.outp
     throw new Error(`Invalid ${issue?.path.join('.') || 'input'}: ${issue?.message ?? 'invalid input'}`);
   }
   return parsed.data;
+}
+
+/**
+ * The assistant supplies custom columns as per-line `attributes: [{name,value}]`
+ * pairs. Fold the distinct names (first-appearance order) into the document's
+ * `columnDefs` (id + label) and rewrite each line's attributes to the id-keyed
+ * record that the zod schema + storage expect. Idempotent — already-object
+ * attributes (edited/restaged payloads) and column-less docs pass through.
+ */
+function applyAiColumns<T extends Record<string, unknown>>(input: T): T {
+  const items = Array.isArray(input.items) ? (input.items as Record<string, unknown>[]) : undefined;
+  if (!items) return input;
+  if (!items.some((it) => Array.isArray(it?.attributes))) return input; // no pair-form → nothing to fold
+  const order: string[] = [];
+  for (const it of items) {
+    for (const a of (Array.isArray(it.attributes) ? it.attributes : []) as { name?: unknown }[]) {
+      const name = String(a?.name ?? '').trim();
+      if (name && !order.includes(name)) order.push(name);
+    }
+  }
+  const idFor = new Map<string, string>();
+  const columnDefs: ColumnDef[] = order.map((label, i) => {
+    const id = `c${i + 1}`; idFor.set(label, id); return { id, label };
+  });
+  const newItems = items.map((it) => {
+    const obj: Record<string, string> = {};
+    for (const a of (Array.isArray(it.attributes) ? it.attributes : []) as { name?: unknown; value?: unknown }[]) {
+      const name = String(a?.name ?? '').trim();
+      const value = String(a?.value ?? '').trim();
+      const id = name ? idFor.get(name) : undefined;
+      if (id && value) obj[id] = value;
+    }
+    return { ...it, attributes: obj };
+  });
+  return { ...input, items: newItems, columnDefs } as T;
 }
 
 // ── Preview helpers ─────────────────────────────────────────────────────────
@@ -190,10 +227,27 @@ function diffDetails(
   return out;
 }
 
-function docItemsPreview(items: { description: string; qty: number; uom: string; rate: number; isToolingCharge?: boolean }[]): string[] {
-  return items.map((it, i) =>
-    `${i + 1}. ${it.description} — ${it.qty} ${it.uom} × ${formatINR(it.rate)} = ${formatINR(r2(it.qty * it.rate))}${it.isToolingCharge ? ' · tooling/NRE' : ''}`,
-  );
+type PreviewItem = {
+  description: string; qty: number; uom: string; rate: number;
+  isToolingCharge?: boolean; groupLabel?: string; attributes?: Record<string, string>;
+};
+function docItemsPreview(items: PreviewItem[], columnDefs?: ColumnDef[]): string[] {
+  const labelById = new Map((columnDefs ?? []).map((c) => [c.id, c.label]));
+  const lines: string[] = [];
+  let lastGroup: string | undefined;
+  items.forEach((it, i) => {
+    const g = (it.groupLabel ?? '').trim();
+    if (g && g !== lastGroup) lines.push(`▸ ${g}`);
+    lastGroup = g || undefined;
+    const attrs = Object.entries(it.attributes ?? {})
+      .map(([k, v]) => `${labelById.get(k) ?? k}: ${v}`)
+      .join(', ');
+    lines.push(
+      `${i + 1}. ${it.description} — ${it.qty} ${it.uom} × ${formatINR(it.rate)} = ${formatINR(r2(it.qty * it.rate))}` +
+      `${it.isToolingCharge ? ' · tooling/NRE' : ''}${attrs ? ` · ${attrs}` : ''}`,
+    );
+  });
+  return lines;
 }
 
 function docTotalsDetails(details: KV[], interstate: boolean, items: { qty: number; rate: number; gstRate: number }[]) {
@@ -300,12 +354,12 @@ async function buildStage(tx: Tx, kind: string, input: Record<string, unknown>):
       return { payload: d, title: `Convert lead “${cur.customerName}” to customer`, details };
     }
     case 'create_quotation': {
-      const d = parseOrThrow(quotationInput, {
+      const d = parseOrThrow(quotationInput, applyAiColumns({
         ...input,
         docDate: input.docDate ?? todayIST(),
         terms: realNewlines(input.terms),
         notes: realNewlines(input.notes),
-      });
+      }));
       if (d.items.length > MAX_AI_ITEMS) throw new Error(`Too many items (max ${MAX_AI_ITEMS}).`);
       const cust = await requireCustomer(tx, d.customerId);
       const interstate = isInterstate(await getSupplierStateCode(tx), cust.stateCode);
@@ -317,7 +371,7 @@ async function buildStage(tx: Tx, kind: string, input: Record<string, unknown>):
       docTotalsDetails(details, interstate, d.items);
       return {
         payload: d, title: `Create quotation for ${cust.name}`, details,
-        items: docItemsPreview(d.items),
+        items: docItemsPreview(d.items, d.columnDefs),
       };
     }
     case 'set_quotation_status': {
@@ -332,9 +386,9 @@ async function buildStage(tx: Tx, kind: string, input: Record<string, unknown>):
       };
     }
     case 'update_quotation': {
-      const d = parseOrThrow(updateQuotationDocInput, {
+      const d = parseOrThrow(updateQuotationDocInput, applyAiColumns({
         ...input, terms: realNewlines(input.terms), notes: realNewlines(input.notes),
-      });
+      }));
       if (d.items && d.items.length > MAX_AI_ITEMS) throw new Error(`Too many items (max ${MAX_AI_ITEMS}).`);
       if (d.docDate === undefined && d.validityDays === undefined && d.terms === undefined
         && d.notes === undefined && !d.items) {
@@ -352,7 +406,7 @@ async function buildStage(tx: Tx, kind: string, input: Record<string, unknown>):
       if (d.items) {
         docTotalsDetails(details, q.isInterstate, d.items);
         push(details, 'Previous total', formatINR(q.grandTotal));
-        items = docItemsPreview(d.items);
+        items = docItemsPreview(d.items, d.columnDefs);
       }
       return {
         payload: d, title: `Edit quotation ${q.number}`, details, items,
@@ -377,11 +431,11 @@ async function buildStage(tx: Tx, kind: string, input: Record<string, unknown>):
       };
     }
     case 'create_invoice': {
-      const d = parseOrThrow(invoiceInput, {
+      const d = parseOrThrow(invoiceInput, applyAiColumns({
         ...input,
         docDate: input.docDate ?? todayIST(),
         terms: realNewlines(input.terms),
-      });
+      }));
       if (d.items.length > MAX_AI_ITEMS) throw new Error(`Too many items (max ${MAX_AI_ITEMS}).`);
       const cust = await requireCustomer(tx, d.customerId);
       const interstate = isInterstate(await getSupplierStateCode(tx), cust.stateCode);
@@ -393,7 +447,7 @@ async function buildStage(tx: Tx, kind: string, input: Record<string, unknown>):
       docTotalsDetails(details, interstate, d.items);
       return {
         payload: d, title: `Create tax invoice for ${cust.name}`, details,
-        items: docItemsPreview(d.items),
+        items: docItemsPreview(d.items, d.columnDefs),
         warning: 'Issues a numbered GST invoice on confirm.',
       };
     }
@@ -409,9 +463,9 @@ async function buildStage(tx: Tx, kind: string, input: Record<string, unknown>):
       };
     }
     case 'update_invoice': {
-      const d = parseOrThrow(updateInvoiceDocInput, {
+      const d = parseOrThrow(updateInvoiceDocInput, applyAiColumns({
         ...input, terms: realNewlines(input.terms), notes: realNewlines(input.notes),
-      });
+      }));
       if (d.items && d.items.length > MAX_AI_ITEMS) throw new Error(`Too many items (max ${MAX_AI_ITEMS}).`);
       if (d.docDate === undefined && d.poRef === undefined && d.terms === undefined
         && d.notes === undefined && !d.items) {
@@ -429,7 +483,7 @@ async function buildStage(tx: Tx, kind: string, input: Record<string, unknown>):
       if (d.items) {
         docTotalsDetails(details, inv.isInterstate, d.items);
         push(details, 'Previous total', formatINR(inv.grandTotal));
-        items = docItemsPreview(d.items);
+        items = docItemsPreview(d.items, d.columnDefs);
       }
       const warnings = [
         d.items ? `Amends issued GST invoice ${inv.number} — all line items are replaced and tax figures recompute.` : undefined,
@@ -500,7 +554,7 @@ async function buildStage(tx: Tx, kind: string, input: Record<string, unknown>):
       };
     }
     case 'create_order': {
-      const d = parseOrThrow(orderInput, { ...input, docDate: input.docDate ?? todayIST() });
+      const d = parseOrThrow(orderInput, applyAiColumns({ ...input, docDate: input.docDate ?? todayIST() }));
       if (d.items.length > MAX_AI_ITEMS) throw new Error(`Too many items (max ${MAX_AI_ITEMS}).`);
       const cust = await requireCustomer(tx, d.customerId);
       const subtotal = r2(d.items.reduce((s, it) => s + it.qty * it.rate, 0));
@@ -511,7 +565,7 @@ async function buildStage(tx: Tx, kind: string, input: Record<string, unknown>):
       push(details, 'Category', d.orderCategory);
       push(details, 'Material', d.materialOwnership);
       push(details, 'Order value (ex-GST)', formatINR(subtotal));
-      return { payload: d, title: `Create sales order for ${cust.name}`, details, items: docItemsPreview(d.items) };
+      return { payload: d, title: `Create sales order for ${cust.name}`, details, items: docItemsPreview(d.items, d.columnDefs) };
     }
     case 'set_order_status': {
       const d = parseOrThrow(orderStatusInput, input);

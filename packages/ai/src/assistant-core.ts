@@ -23,7 +23,12 @@ export type EditField = {
 
 /** An editable line item (documents) on the confirmation card. */
 export type EditItem = {
-  description: string; hsn?: string; qty: number; uom?: string; rate: number; gstRate: number; isToolingCharge?: boolean;
+  description: string; hsn?: string; qty: number; uom?: string; rate: number; gstRate: number;
+  isToolingCharge?: boolean;
+  /** Part/section this line sits under (blank = ungrouped). */
+  groupLabel?: string;
+  /** Custom-column values keyed by columnDef.id. */
+  attributes?: Record<string, string>;
 };
 
 /** A write the agent proposed, staged server-side, awaiting user confirmation. */
