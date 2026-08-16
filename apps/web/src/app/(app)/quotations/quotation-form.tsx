@@ -1,9 +1,10 @@
 'use client';
-import { useActionState, useMemo, useState, useTransition } from 'react';
+import { useActionState, useMemo, useState, useTransition, type FormEvent } from 'react';
 import { computeGst, isInterstate, formatINR, type ColumnDef } from '@ms/core';
 import { SubmitButton } from '@/components/submit-button';
 import { AiPolishButton } from '@/components/ai-polish-button';
-import { LineItemsEditor, emptyRow, serializeItems, type LineRow } from '@/components/line-items-editor';
+import { LineItemsEditor, emptyRow, serializeItems, cleanColumns, itemIssues, rowsFromStored, type LineRow } from '@/components/line-items-editor';
+import { useFormDraft } from '@/components/use-form-draft';
 import { createQuotationAction, updateQuotationAction, type ActionState } from './actions';
 import { draftQuotationItemsAction } from './ai-actions';
 
@@ -32,11 +33,12 @@ function AiDraftCard({
       if (!res.ok) { setError(res.error); return; }
       const d = res.draft;
       onDraft(
-        d.items.map((it) => ({
-          ...emptyRow(),
-          description: it.description, hsn: it.hsn, qty: String(it.qty), uom: it.uom,
-          rate: String(it.rate), gstRate: String(it.gstRate), tooling: it.isToolingCharge,
-        })),
+        // Rebuild grouped rows so dies land under their part heading (groupLabel).
+        rowsFromStored(d.items.map((it) => ({
+          description: it.description, hsn: it.hsn, qty: it.qty, uom: it.uom,
+          rate: it.rate, gstRate: it.gstRate, isToolingCharge: it.isToolingCharge,
+          groupLabel: it.groupLabel || null, attributes: {},
+        }))),
         d.termsSuggestion,
         { assumptions: d.assumptions, flags: d.flags, basis: d.items.map((it) => it.basis).filter(Boolean) },
       );
@@ -47,14 +49,14 @@ function AiDraftCard({
       <div className="flex items-center gap-2 mb-1">
         <span className="text-accent" aria-hidden>✦</span>
         <span className="font-medium text-sm">Draft with AI</span>
-        <span className="text-[0.65rem] text-faint">proposes items &amp; rates from your quote history — you review everything</span>
+        <span className="text-[0.65rem] text-faint">list parts with their dies &amp; prices — it groups each die under its part; you review everything</span>
       </div>
       <textarea
         value={requirement}
         onChange={(e) => setRequirement(e.target.value)}
-        rows={2}
+        rows={4}
         className="field mt-1"
-        placeholder="Describe the job… e.g. Progressive press tool for 1mm CRCA bracket, 4 stations, ~50k strokes/month + 500 pcs initial production"
+        placeholder={'List the parts, their dies and price per die — e.g.\nPart 30017AW1002: blanking die 30000, bending die 16000\nPart 41928: blanking & punching die 55000, bending die 20000\n\n…or describe the job in your own words.'}
       />
       <div className="flex items-center gap-3 mt-2">
         <button type="button" onClick={run} disabled={pending || requirement.trim().length < 10} className="btn-primary text-xs disabled:opacity-50">
@@ -101,7 +103,27 @@ export function QuotationForm({
   const interstate = isInterstate(supplierStateCode, cust?.stateCode);
   const items = useMemo(() => serializeItems(rows, columns), [rows, columns]);
   const totals = useMemo(() => computeGst(items, interstate), [items, interstate]);
+  const cleanCols = useMemo(() => cleanColumns(columns), [columns]);
+  const issues = useMemo(() => itemIssues(rows), [rows]);
   const savable = items.length;
+
+  // Draft safety-net — a heavy edit survives a refresh / crash / accidental nav.
+  const draftKey = mode === 'edit' && quotationId ? `quotation:${quotationId}` : 'quotation:new';
+  const draftSnapshot = useMemo(() => ({ customerId, rows, columns, terms, notes }), [customerId, rows, columns, terms, notes]);
+  const { draft, clear: clearDraft } = useFormDraft(draftKey, draftSnapshot);
+  const [draftDismissed, setDraftDismissed] = useState(false);
+  const showRestore = !draftDismissed && !!draft
+    && ((draft.rows?.some((r) => r.description?.trim()) ?? false) || (draft.columns?.length ?? 0) > 0);
+  const restoreDraft = () => {
+    if (!draft) return;
+    setCustomerId(draft.customerId ?? '');
+    setRows(draft.rows?.length ? draft.rows : [emptyRow()]);
+    setColumns(draft.columns ?? []);
+    setTerms(draft.terms ?? '');
+    setNotes(draft.notes ?? '');
+    setDraftDismissed(true);
+  };
+  const discardDraft = () => { clearDraft(); setDraftDismissed(true); };
 
   const applyDraft = (drafted: LineRow[], termsSuggestion: string[], meta: DraftMeta) => {
     setUndoRows(rows.some((r) => r.description.trim()) ? rows : null);
@@ -114,13 +136,27 @@ export function QuotationForm({
   };
 
   const itemsJson = JSON.stringify(items);
-  const columnDefsJson = JSON.stringify(columns);
+  const columnDefsJson = JSON.stringify(cleanCols);
+
+  const onSubmit = (e: FormEvent<HTMLFormElement>) => {
+    if (issues.length) { e.preventDefault(); return; } // block save until fixable issues are resolved
+    clearDraft();
+  };
 
   return (
-    <form action={action} className="flex flex-col gap-5">
+    <form action={action} onSubmit={onSubmit} className="flex flex-col gap-5">
       <input type="hidden" name="items" value={itemsJson} />
       <input type="hidden" name="columnDefs" value={columnDefsJson} />
       {mode === 'edit' && <input type="hidden" name="id" value={quotationId} />}
+
+      {showRestore && (
+        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-accent/40 bg-accent-soft/30 px-4 py-2.5 text-sm">
+          <span aria-hidden>💾</span>
+          <span className="flex-1 min-w-0">You have an unsaved draft of this quotation from earlier.</span>
+          <button type="button" onClick={restoreDraft} className="btn-primary text-xs !py-1">Restore it</button>
+          <button type="button" onClick={discardDraft} className="text-muted text-xs hover:underline">Discard</button>
+        </div>
+      )}
 
       <div className="card p-4 grid grid-cols-2 md:grid-cols-4 gap-3">
         {mode === 'edit' ? (
@@ -203,9 +239,21 @@ export function QuotationForm({
         </div>
       </div>
 
-      {state.error && <p className="text-sm text-crit">{state.error}</p>}
+      {issues.length > 0 && (
+        <div className="rounded-lg border border-crit/40 bg-[#f6e5e1]/40 px-4 py-2.5 text-sm">
+          <div className="font-medium text-crit mb-1">Fix {issues.length === 1 ? 'this' : 'these'} before saving:</div>
+          <ul className="list-disc pl-5 text-crit/90 space-y-0.5">
+            {issues.map((iss, i) => <li key={i}>{iss.message}</li>)}
+          </ul>
+        </div>
+      )}
+      {state.error && (
+        <div className="rounded-lg border border-crit/50 bg-[#f6e5e1]/60 px-4 py-2.5 text-sm text-crit">
+          <b>Couldn’t save:</b> {state.error} <span className="text-crit/70">— your entries are still here; fix and try again.</span>
+        </div>
+      )}
       <div className="flex items-center gap-3">
-        <SubmitButton className="btn-primary">{mode === 'edit' ? 'Save changes' : 'Create quotation'}</SubmitButton>
+        <SubmitButton className="btn-primary" disabled={issues.length > 0}>{mode === 'edit' ? 'Save changes' : 'Create quotation'}</SubmitButton>
         <span className="text-xs text-faint">{savable} line{savable === 1 ? '' : 's'} will be saved</span>
       </div>
     </form>

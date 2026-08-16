@@ -20,13 +20,14 @@ export type CustomerInput = z.infer<typeof customerInput>;
 // A user-defined descriptive column on a document's item table (e.g. "Steel
 // grade", "Cavities"). Purely informational — never feeds pricing or tax.
 export const columnDef = z.object({
-  id: z.string().trim().min(1).max(40),
-  label: z.string().trim().min(1, 'Column name is required').max(40),
+  id: z.string().trim().min(1).max(64),
+  label: z.string().trim().min(1, 'Column name is required').max(60),
 });
 export type ColumnDef = z.infer<typeof columnDef>;
 
 // Custom-column values for a single row, keyed by columnDef.id → free text.
-const rowAttributes = z.record(z.string().max(300)).default({});
+// Generous cap — these are descriptive; over-long values are clamped upstream.
+const rowAttributes = z.record(z.string().max(2000)).default({});
 
 export const invoiceItemInput = z.object({
   description: z.string().trim().min(1, 'Description is required'),

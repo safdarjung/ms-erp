@@ -47,35 +47,78 @@ export type ItemPayload = {
   isToolingCharge: boolean; groupLabel?: string; attributes: Record<string, string>;
 };
 
+// Field caps — kept at/under the DB + zod limits so a long value is clamped here
+// rather than blowing up the whole save server-side.
+const CAP = { hsn: 10, uom: 10, group: 120, attr: 2000, colLabel: 60 } as const;
+const clamp = (s: string, n: number) => (s.length > n ? s.slice(0, n) : s);
+
+/** Drop unnamed/blank columns and trim+clamp labels. An unnamed column must never
+ *  be able to fail a save — it's simply ignored. */
+export function cleanColumns(columns: ColumnDef[]): ColumnDef[] {
+  const seen = new Set<string>();
+  const out: ColumnDef[] = [];
+  for (const c of columns) {
+    const label = clamp(c.label.trim(), CAP.colLabel);
+    if (!label || seen.has(c.id)) continue;
+    seen.add(c.id);
+    out.push({ id: c.id, label });
+  }
+  return out;
+}
+
+/** Line the rows the way they will be saved (grouped-contiguous, then ungrouped),
+ *  numbering only the rows that will actually persist (blank descriptions dropped). */
+function orderedForSave(rows: LineRow[]): LineRow[] {
+  const gids: string[] = [];
+  for (const r of rows) if (r.gid && !gids.includes(r.gid)) gids.push(r.gid);
+  return [...gids.flatMap((gid) => rows.filter((r) => r.gid === gid)), ...rows.filter((r) => !r.gid)];
+}
+
 /**
  * Flatten editor rows into the persisted order — every group's rows contiguously
  * (in group order), then ungrouped rows. Blank-description rows are dropped.
+ * Every field is clamped to its limit so no single value can fail the save.
  * The print template re-groups by consecutive `groupLabel`, so contiguity matters.
  */
 export function serializeItems(rows: LineRow[], columns: ColumnDef[]): ItemPayload[] {
-  const validCols = new Set(columns.map((c) => c.id));
-  const gids: string[] = [];
-  for (const r of rows) if (r.gid && !gids.includes(r.gid)) gids.push(r.gid);
-  const ordered = [
-    ...gids.flatMap((gid) => rows.filter((r) => r.gid === gid)),
-    ...rows.filter((r) => !r.gid),
-  ];
-  return ordered
+  const validCols = new Set(cleanColumns(columns).map((c) => c.id));
+  return orderedForSave(rows)
     .filter((r) => r.description.trim())
     .map((r) => {
-      // keep only attribute values for columns that still exist
+      // keep only values for columns that still exist + are named
       const attributes: Record<string, string> = {};
       for (const [k, v] of Object.entries(r.attributes ?? {})) {
-        if (validCols.has(k) && v.trim()) attributes[k] = v;
+        if (validCols.has(k) && v.trim()) attributes[k] = clamp(v, CAP.attr);
       }
-      const label = (r.gid ? r.groupLabel ?? '' : '').trim();
+      const label = clamp((r.gid ? r.groupLabel ?? '' : '').trim(), CAP.group);
       return {
-        description: r.description, hsn: r.hsn, qty: Number(r.qty) || 0, uom: r.uom,
+        description: r.description.trim(), hsn: clamp((r.hsn ?? '').trim(), CAP.hsn),
+        qty: Number(r.qty) || 0, uom: clamp((r.uom ?? '').trim(), CAP.uom) || 'NOS',
         rate: Number(r.rate) || 0, gstRate: Number(r.gstRate) || 0, isToolingCharge: !!r.tooling,
         groupLabel: label || undefined, attributes,
       };
     });
 }
+
+export type ItemIssue = { rid: string; line: number; message: string };
+
+/** Client-side blocking issues — the same conditions that would otherwise make the
+ *  server reject the whole document. Surfaced inline so the user fixes them before
+ *  submitting (never a wasted round-trip). */
+export function itemIssues(rows: LineRow[]): ItemIssue[] {
+  const issues: ItemIssue[] = [];
+  let line = 0;
+  for (const r of orderedForSave(rows)) {
+    if (!r.description.trim()) continue;
+    line += 1;
+    if (!(Number(r.qty) > 0)) issues.push({ rid: r.rid, line, message: `Line ${line} needs a quantity greater than 0.` });
+  }
+  if (line === 0) issues.push({ rid: '', line: 0, message: 'Add at least one line with a description.' });
+  return issues;
+}
+
+/** True when a row will actually persist but has an invalid quantity. */
+const rowQtyBad = (r: LineRow) => !!r.description.trim() && !(Number(r.qty) > 0);
 
 type StoredItem = {
   description: string; hsn?: string | null; qty: unknown; uom: string; rate: unknown; gstRate: unknown;
@@ -184,7 +227,7 @@ export function LineItemsEditor({
         <td key={c.id}><input value={r.attributes[c.id] ?? ''} onChange={(e) => patchAttr(r.rid, c.id, e.target.value)} className="field !py-1 min-w-[6rem]" /></td>
       ))}
       <td><input value={r.hsn} onChange={(e) => patch(r.rid, { hsn: e.target.value })} className="field !py-1 w-24 font-mono" /></td>
-      <td><input value={r.qty} onChange={(e) => num(e.target.value) && patch(r.rid, { qty: e.target.value })} className="field !py-1 w-16 text-right" inputMode="decimal" /></td>
+      <td><input value={r.qty} onChange={(e) => num(e.target.value) && patch(r.rid, { qty: e.target.value })} className={`field !py-1 w-16 text-right ${rowQtyBad(r) ? '!border-crit' : ''}`} inputMode="decimal" title={rowQtyBad(r) ? 'Quantity must be greater than 0' : undefined} /></td>
       <td><input value={r.uom} onChange={(e) => patch(r.rid, { uom: e.target.value })} className="field !py-1 w-16" /></td>
       <td><input value={r.rate} onChange={(e) => num(e.target.value) && patch(r.rid, { rate: e.target.value })} className="field !py-1 w-24 text-right" inputMode="decimal" placeholder="0" /></td>
       <td><input value={r.gstRate} onChange={(e) => num(e.target.value) && patch(r.rid, { gstRate: e.target.value })} className="field !py-1 w-16 text-right" inputMode="decimal" /></td>
@@ -348,7 +391,7 @@ function MobileRow({
       )}
       <div className="grid grid-cols-2 gap-2">
         <label className="label !mb-0.5 col-span-2">HSN/SAC<input value={r.hsn} onChange={(e) => patch(r.rid, { hsn: e.target.value })} className="field font-mono mt-0.5" /></label>
-        <label className="label !mb-0.5">Qty<input value={r.qty} onChange={(e) => numOk(e.target.value) && patch(r.rid, { qty: e.target.value })} className="field mt-0.5" inputMode="decimal" /></label>
+        <label className="label !mb-0.5">Qty<input value={r.qty} onChange={(e) => numOk(e.target.value) && patch(r.rid, { qty: e.target.value })} className={`field mt-0.5 ${r.description.trim() && !(Number(r.qty) > 0) ? '!border-crit' : ''}`} inputMode="decimal" /></label>
         <label className="label !mb-0.5">UOM<input value={r.uom} onChange={(e) => patch(r.rid, { uom: e.target.value })} className="field mt-0.5" /></label>
         <label className="label !mb-0.5">Rate ₹<input value={r.rate} onChange={(e) => numOk(e.target.value) && patch(r.rid, { rate: e.target.value })} className="field mt-0.5" inputMode="decimal" placeholder="0" /></label>
         <label className="label !mb-0.5">GST %<input value={r.gstRate} onChange={(e) => numOk(e.target.value) && patch(r.rid, { gstRate: e.target.value })} className="field mt-0.5" inputMode="decimal" /></label>
