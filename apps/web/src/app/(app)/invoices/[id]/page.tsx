@@ -5,6 +5,7 @@ import { getInvoice } from '@/lib/queries';
 import { requireUser, can } from '@/lib/rbac';
 import { formatDate } from '@/lib/format';
 import { StatusPill } from '@/components/status-pill';
+import { DocumentItemsTable } from '@/components/document-items-table';
 import { InvoiceStatusSelect } from '../status-select';
 import { PaymentsPanel } from '../payments-panel';
 
@@ -56,27 +57,7 @@ export default async function InvoiceDetail({ params }: { params: Promise<{ id: 
         </div>
       </div>
 
-      <div className="card overflow-x-auto mb-4">
-        <table className="w-full text-sm min-w-[640px]">
-          <thead>
-            <tr className="text-left text-faint border-b border-line text-xs uppercase [&>th]:px-4 [&>th]:py-2 [&>th]:font-medium">
-              <th>#</th><th>Description</th><th>HSN</th><th className="text-right">Qty</th><th className="text-right">Rate</th><th className="text-right">Amount</th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((it, i) => (
-              <tr key={it.id} className="border-b border-line last:border-0 [&>td]:px-4 [&>td]:py-2">
-                <td>{i + 1}</td>
-                <td className="text-ink">{it.description}</td>
-                <td className="font-mono text-xs">{it.hsn ?? '—'}</td>
-                <td className="text-right tabular-nums">{Number(it.qty)}</td>
-                <td className="text-right tabular-nums font-mono">{formatINR(it.rate)}</td>
-                <td className="text-right tabular-nums font-mono">{formatINR(it.taxableValue)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <DocumentItemsTable items={items} columns={inv.columnDefs} />
 
       <div className="grid md:grid-cols-2 gap-4 items-start">
         <PaymentsPanel invoiceId={inv.id} outstanding={ps.outstanding} payments={payments} canEdit={canEdit && inv.status !== 'cancelled'} />

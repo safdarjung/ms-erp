@@ -5,6 +5,7 @@ import { getQuotation } from '@/lib/queries';
 import { requireUser, can } from '@/lib/rbac';
 import { formatDate } from '@/lib/format';
 import { StatusPill } from '@/components/status-pill';
+import { DocumentItemsTable } from '@/components/document-items-table';
 import { ConfirmButton } from '@/components/confirm-button';
 import { convertToInvoiceAction, convertToOrderAction, duplicateQuotationAction } from '../actions';
 import { QuotationStatusSelect } from '../status-select';
@@ -95,30 +96,7 @@ export default async function QuotationDetail({ params }: { params: Promise<{ id
         </div>
       </div>
 
-      <div className="card overflow-x-auto mb-4">
-        <table className="w-full text-sm min-w-[640px]">
-          <thead>
-            <tr className="text-left text-faint border-b border-line text-xs uppercase [&>th]:px-4 [&>th]:py-2 [&>th]:font-medium">
-              <th>#</th><th>Description</th><th>HSN</th><th className="text-right">Qty</th><th className="text-right">Rate</th><th className="text-right">Amount</th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((it, i) => (
-              <tr key={it.id} className="border-b border-line last:border-0 [&>td]:px-4 [&>td]:py-2">
-                <td>{i + 1}</td>
-                <td className="text-ink">
-                  {it.description}
-                  {it.isToolingCharge && <span className="pill bg-accent-soft text-accent ml-2 text-[0.65rem]">tooling / NRE</span>}
-                </td>
-                <td className="font-mono text-xs">{it.hsn ?? '—'}</td>
-                <td className="text-right tabular-nums">{Number(it.qty)}</td>
-                <td className="text-right tabular-nums font-mono">{formatINR(it.rate)}</td>
-                <td className="text-right tabular-nums font-mono">{formatINR(it.taxableValue)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <DocumentItemsTable items={items} columns={q.columnDefs} />
 
       <div className="flex flex-col md:flex-row gap-4 md:items-start">
         {q.terms ? (
