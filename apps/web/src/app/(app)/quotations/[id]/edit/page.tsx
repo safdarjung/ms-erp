@@ -3,7 +3,7 @@ import { notFound, redirect } from 'next/navigation';
 import { aiEnabled } from '@ms/ai';
 import { requireUser, can } from '@/lib/rbac';
 import { getQuotation, customersForSelect, getLetterhead } from '@/lib/queries';
-import { rowsFromStored } from '@/components/line-items-editor';
+import { rowsFromStored } from '@/components/line-items-shared';
 import { QuotationForm } from '../../quotation-form';
 
 export const metadata = { title: 'Edit quotation' };

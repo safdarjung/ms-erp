@@ -1,158 +1,19 @@
 'use client';
 import { type Dispatch, type SetStateAction } from 'react';
 import { formatINR, type ColumnDef } from '@ms/core';
+import {
+  emptyRow, newColumn, uid, lineAmount, groupSubtotal, rowQtyBad, type LineRow,
+} from './line-items-shared';
 
-// A client-side line row. `rid` is a stable React identity; `gid` (when present)
-// binds the row to a part/group so renaming the group never remounts inputs.
-// `groupLabel` is the printed part name (persisted); `attributes` holds the
-// values for the document's user-defined columns, keyed by ColumnDef.id.
-export type LineRow = {
-  rid: string;
-  gid?: string;
-  groupLabel?: string;
-  description: string;
-  hsn: string;
-  qty: string;
-  uom: string;
-  rate: string;
-  gstRate: string;
-  tooling?: boolean;
-  attributes: Record<string, string>;
-};
-
-/** HSN for rubber/plastic moulding dies — this shop's standard line. */
-export const DEFAULT_HSN = '84807100';
-
-let uidSeq = 0;
-const uid = () => `r${Date.now().toString(36)}${(uidSeq++).toString(36)}`;
-
-export const emptyRow = (group?: { gid: string; groupLabel: string }): LineRow => ({
-  rid: uid(),
-  gid: group?.gid,
-  groupLabel: group?.groupLabel,
-  description: '', hsn: DEFAULT_HSN, qty: '1', uom: 'NOS', rate: '', gstRate: '18',
-  tooling: false, attributes: {},
-});
-
-export const newColumn = (label: string): ColumnDef => ({ id: uid(), label });
-
-const lineAmount = (r: LineRow) => (Number(r.qty) || 0) * (Number(r.rate) || 0);
-const groupSubtotal = (rows: LineRow[], gid: string) =>
-  rows.filter((r) => r.gid === gid).reduce((s, r) => s + lineAmount(r), 0);
-
-// ── Serialize / reconstruct (shared by every form + edit page) ───────────────
-
-export type ItemPayload = {
-  description: string; hsn: string; qty: number; uom: string; rate: number; gstRate: number;
-  isToolingCharge: boolean; groupLabel?: string; attributes: Record<string, string>;
-};
-
-// Field caps — kept at/under the DB + zod limits so a long value is clamped here
-// rather than blowing up the whole save server-side.
-const CAP = { hsn: 10, uom: 10, group: 120, attr: 2000, colLabel: 60 } as const;
-const clamp = (s: string, n: number) => (s.length > n ? s.slice(0, n) : s);
-
-/** Drop unnamed/blank columns and trim+clamp labels. An unnamed column must never
- *  be able to fail a save — it's simply ignored. */
-export function cleanColumns(columns: ColumnDef[]): ColumnDef[] {
-  const seen = new Set<string>();
-  const out: ColumnDef[] = [];
-  for (const c of columns) {
-    const label = clamp(c.label.trim(), CAP.colLabel);
-    if (!label || seen.has(c.id)) continue;
-    seen.add(c.id);
-    out.push({ id: c.id, label });
-  }
-  return out;
-}
-
-/** Line the rows the way they will be saved (grouped-contiguous, then ungrouped),
- *  numbering only the rows that will actually persist (blank descriptions dropped). */
-function orderedForSave(rows: LineRow[]): LineRow[] {
-  const gids: string[] = [];
-  for (const r of rows) if (r.gid && !gids.includes(r.gid)) gids.push(r.gid);
-  return [...gids.flatMap((gid) => rows.filter((r) => r.gid === gid)), ...rows.filter((r) => !r.gid)];
-}
-
-/**
- * Flatten editor rows into the persisted order — every group's rows contiguously
- * (in group order), then ungrouped rows. Blank-description rows are dropped.
- * Every field is clamped to its limit so no single value can fail the save.
- * The print template re-groups by consecutive `groupLabel`, so contiguity matters.
- */
-export function serializeItems(rows: LineRow[], columns: ColumnDef[]): ItemPayload[] {
-  const validCols = new Set(cleanColumns(columns).map((c) => c.id));
-  return orderedForSave(rows)
-    .filter((r) => r.description.trim())
-    .map((r) => {
-      // keep only values for columns that still exist + are named
-      const attributes: Record<string, string> = {};
-      for (const [k, v] of Object.entries(r.attributes ?? {})) {
-        if (validCols.has(k) && v.trim()) attributes[k] = clamp(v, CAP.attr);
-      }
-      const label = clamp((r.gid ? r.groupLabel ?? '' : '').trim(), CAP.group);
-      return {
-        description: r.description.trim(), hsn: clamp((r.hsn ?? '').trim(), CAP.hsn),
-        qty: Number(r.qty) || 0, uom: clamp((r.uom ?? '').trim(), CAP.uom) || 'NOS',
-        rate: Number(r.rate) || 0, gstRate: Number(r.gstRate) || 0, isToolingCharge: !!r.tooling,
-        groupLabel: label || undefined, attributes,
-      };
-    });
-}
-
-export type ItemIssue = { rid: string; line: number; message: string };
-
-/** Client-side blocking issues — the same conditions that would otherwise make the
- *  server reject the whole document. Surfaced inline so the user fixes them before
- *  submitting (never a wasted round-trip). */
-export function itemIssues(rows: LineRow[]): ItemIssue[] {
-  const issues: ItemIssue[] = [];
-  let line = 0;
-  for (const r of orderedForSave(rows)) {
-    if (!r.description.trim()) continue;
-    line += 1;
-    if (!(Number(r.qty) > 0)) issues.push({ rid: r.rid, line, message: `Line ${line} needs a quantity greater than 0.` });
-  }
-  if (line === 0) issues.push({ rid: '', line: 0, message: 'Add at least one line with a description.' });
-  return issues;
-}
-
-/** True when a row will actually persist but has an invalid quantity. */
-const rowQtyBad = (r: LineRow) => !!r.description.trim() && !(Number(r.qty) > 0);
-
-type StoredItem = {
-  description: string; hsn?: string | null; qty: unknown; uom: string; rate: unknown; gstRate: unknown;
-  isToolingCharge?: boolean; groupLabel?: string | null; attributes?: Record<string, string> | null;
-};
-
-/** Rebuild editor rows from stored items — reconstruct a stable gid per run of
- *  consecutive rows sharing the same non-empty group label. */
-export function rowsFromStored(items: StoredItem[]): LineRow[] {
-  let lastLabel: string | null = null;
-  let lastGid: string | undefined;
-  return items.map((it) => {
-    const label = (it.groupLabel ?? '').trim();
-    let gid: string | undefined;
-    if (label) {
-      if (label === lastLabel && lastGid) gid = lastGid;
-      else { gid = uid(); }
-      lastGid = gid;
-    } else {
-      lastGid = undefined;
-    }
-    lastLabel = label || null;
-    return {
-      rid: uid(), gid, groupLabel: label || undefined,
-      description: it.description, hsn: it.hsn ?? DEFAULT_HSN,
-      qty: String(Number(it.qty)), uom: it.uom, rate: String(Number(it.rate)), gstRate: String(Number(it.gstRate)),
-      tooling: !!it.isToolingCharge, attributes: { ...(it.attributes ?? {}) },
-    };
-  });
-}
+// Re-export the pure helpers so existing client imports from this module keep
+// working. Server components must import them from './line-items-shared' directly
+// (importing a plain function through this 'use client' module yields a client ref).
+export {
+  DEFAULT_HSN, emptyRow, newColumn, cleanColumns, serializeItems, rowsFromStored, itemIssues,
+  type LineRow, type ItemPayload, type ItemIssue,
+} from './line-items-shared';
 
 const num = (v: string) => /^\d*\.?\d*$/.test(v);
-
-// ── Editor ───────────────────────────────────────────────────────────────────
 
 /**
  * Grouped, column-customisable line-item editor. Rows may sit under a named part
@@ -169,7 +30,6 @@ export function LineItemsEditor({
   setColumns: Dispatch<SetStateAction<ColumnDef[]>>;
   tooling?: boolean;
 }) {
-  // Row helpers keyed by stable rid (safe under reordering / grouping).
   const patch = (rid: string, p: Partial<LineRow>) =>
     setRows((rs) => rs.map((r) => (r.rid === rid ? { ...r, ...p } : r)));
   const patchAttr = (rid: string, colId: string, val: string) =>
@@ -177,7 +37,6 @@ export function LineItemsEditor({
   const removeRow = (rid: string) =>
     setRows((rs) => (rs.length > 1 ? rs.filter((r) => r.rid !== rid) : rs));
 
-  // Group derivation (first-appearance order).
   const gids: string[] = [];
   for (const r of rows) if (r.gid && !gids.includes(r.gid)) gids.push(r.gid);
   const groupRows = (gid: string) => rows.filter((r) => r.gid === gid);
@@ -202,7 +61,6 @@ export function LineItemsEditor({
       return rest.length ? rest : [emptyRow()];
     });
 
-  // Column helpers.
   const addColumn = () => setColumns((cs) => (cs.length < 12 ? [...cs, newColumn(`Column ${cs.length + 1}`)] : cs));
   const renameColumn = (id: string, label: string) => setColumns((cs) => cs.map((c) => (c.id === id ? { ...c, label } : c)));
   const removeColumn = (id: string) => setColumns((cs) => cs.filter((c) => c.id !== id));
@@ -216,7 +74,6 @@ export function LineItemsEditor({
       return next;
     });
 
-  // Total table columns: S.No, Description, …custom, HSN, Qty, UOM, Rate, GST, [Tooling], Amount, remove.
   const ncols = 8 + columns.length + (tooling ? 1 : 0) + 1;
 
   const rowCells = (r: LineRow, sn: number) => (
@@ -333,9 +190,10 @@ export function LineItemsEditor({
       </div>
 
       {/* Add controls */}
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <button type="button" onClick={addUngrouped} className="btn-ghost text-xs">+ Add line</button>
         <button type="button" onClick={addGroup} className="btn-ghost text-xs">+ Add part / group</button>
+        <span className="text-[0.62rem] text-faint">A “part” groups its dies under a heading with a subtotal on the quote &amp; PDF.</span>
       </div>
     </div>
   );
