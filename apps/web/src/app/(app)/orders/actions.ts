@@ -4,7 +4,7 @@ import { revalidatePath } from 'next/cache';
 import { orderInput, ORDER_SETTABLE_STATUSES } from '@ms/core';
 import { withTenant, salesOrder, eq } from '@ms/db';
 import { requirePermission } from '@/lib/rbac';
-import { insertOrderTx, convertOrderToInvoiceTx, duplicateOrderTx } from '@/lib/documents';
+import { insertOrderTx, updateOrderTx, convertOrderToInvoiceTx, duplicateOrderTx } from '@/lib/documents';
 import { toActionError, type ActionResult } from '@/lib/forms';
 
 export type ActionState = { error?: string };
@@ -47,6 +47,46 @@ export async function createOrderAction(_prev: ActionState, formData: FormData):
   revalidatePath('/orders');
   if (newId) redirect(`/orders/${newId}`);
   return {};
+}
+
+export async function updateOrderAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
+  const u = await requirePermission('order.edit');
+  const id = String(formData.get('id') ?? '');
+  if (!id) return { error: 'Missing order' };
+
+  let items: unknown;
+  try { items = JSON.parse(String(formData.get('items') ?? '[]')); } catch { return { error: 'Invalid line items' }; }
+  let columnDefs: unknown = [];
+  try { columnDefs = JSON.parse(String(formData.get('columnDefs') ?? '[]')); } catch { columnDefs = []; }
+
+  const parsed = orderInput.safeParse({
+    customerId: formData.get('customerId'),
+    docDate: formData.get('docDate'),
+    poRef: formData.get('poRef') || undefined,
+    orderCategory: formData.get('orderCategory') || undefined,
+    materialOwnership: formData.get('materialOwnership') || undefined,
+    deliveryDate: formData.get('deliveryDate') || undefined,
+    items,
+    columnDefs,
+  });
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? 'Invalid input' };
+  const d = parsed.data;
+
+  try {
+    await withTenant(u.tenantId, u.userId, (tx) =>
+      updateOrderTx(tx, u, id, {
+        docDate: d.docDate, poRef: d.poRef, orderCategory: d.orderCategory,
+        materialOwnership: d.materialOwnership, deliveryDate: d.deliveryDate,
+        items: d.items, columnDefs: d.columnDefs,
+      }),
+    );
+  } catch (e) {
+    return { error: toActionError(e) };
+  }
+
+  revalidatePath('/orders');
+  revalidatePath(`/orders/${id}`);
+  redirect(`/orders/${id}`);
 }
 
 export async function setOrderStatusAction(id: string, status: string): Promise<ActionResult> {

@@ -4,10 +4,44 @@ import { revalidatePath } from 'next/cache';
 import { invoiceInput, INVOICE_STATUSES, paymentInput } from '@ms/core';
 import { withTenant, taxInvoice, eq } from '@ms/db';
 import { requirePermission } from '@/lib/rbac';
-import { insertInvoiceTx, recordPaymentTx, deletePaymentTx } from '@/lib/documents';
+import { insertInvoiceTx, updateInvoiceTx, recordPaymentTx, deletePaymentTx } from '@/lib/documents';
 import { toActionError, type ActionResult } from '@/lib/forms';
 
 export type ActionState = { error?: string };
+
+export async function updateInvoiceAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
+  const u = await requirePermission('invoice.edit');
+  const id = String(formData.get('id') ?? '');
+  if (!id) return { error: 'Missing invoice' };
+
+  let items: unknown;
+  try { items = JSON.parse(String(formData.get('items') ?? '[]')); } catch { return { error: 'Invalid line items' }; }
+  let columnDefs: unknown = [];
+  try { columnDefs = JSON.parse(String(formData.get('columnDefs') ?? '[]')); } catch { columnDefs = []; }
+
+  const parsed = invoiceInput.safeParse({
+    customerId: formData.get('customerId'),
+    docDate: formData.get('docDate'),
+    poRef: formData.get('poRef') || undefined,
+    terms: formData.get('terms') || undefined,
+    items,
+    columnDefs,
+  });
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? 'Invalid input' };
+  const d = parsed.data;
+
+  try {
+    await withTenant(u.tenantId, u.userId, (tx) =>
+      updateInvoiceTx(tx, u, id, { docDate: d.docDate, poRef: d.poRef, terms: d.terms, items: d.items, columnDefs: d.columnDefs }),
+    );
+  } catch (e) {
+    return { error: toActionError(e) };
+  }
+
+  revalidatePath('/invoices');
+  revalidatePath(`/invoices/${id}`);
+  redirect(`/invoices/${id}`);
+}
 
 export async function createInvoiceAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
   const u = await requirePermission('invoice.create');

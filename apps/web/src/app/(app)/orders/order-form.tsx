@@ -7,21 +7,29 @@ import {
 import { SubmitButton } from '@/components/submit-button';
 import { LineItemsEditor, emptyRow, serializeItems, cleanColumns, itemIssues, type LineRow } from '@/components/line-items-editor';
 import { useFormDraft } from '@/components/use-form-draft';
-import { createOrderAction, type ActionState } from './actions';
+import { createOrderAction, updateOrderAction, type ActionState } from './actions';
 
 type Cust = { id: string; name: string; stateCode: string | null; gstin: string | null };
 
+export type OrderInitial = {
+  customerId: string; docDate: string; poRef: string; orderCategory: string;
+  materialOwnership: string; deliveryDate: string; rows: LineRow[]; columnDefs?: ColumnDef[];
+};
+
 export function OrderForm({
-  customers, supplierStateCode, defaultCustomerId = '',
+  customers, supplierStateCode, defaultCustomerId = '', mode = 'create', orderId, initial,
 }: {
   customers: Cust[];
   supplierStateCode: string;
   defaultCustomerId?: string;
+  mode?: 'create' | 'edit';
+  orderId?: string;
+  initial?: OrderInitial;
 }) {
-  const [state, action] = useActionState<ActionState, FormData>(createOrderAction, {});
-  const [customerId, setCustomerId] = useState(defaultCustomerId);
-  const [rows, setRows] = useState<LineRow[]>([emptyRow()]);
-  const [columns, setColumns] = useState<ColumnDef[]>([]);
+  const [state, action] = useActionState<ActionState, FormData>(mode === 'edit' ? updateOrderAction : createOrderAction, {});
+  const [customerId, setCustomerId] = useState(initial?.customerId ?? defaultCustomerId);
+  const [rows, setRows] = useState<LineRow[]>(initial?.rows?.length ? initial.rows : [emptyRow()]);
+  const [columns, setColumns] = useState<ColumnDef[]>(initial?.columnDefs ?? []);
   const today = new Date().toISOString().slice(0, 10);
 
   const cust = customers.find((c) => c.id === customerId);
@@ -32,8 +40,9 @@ export function OrderForm({
   const issues = useMemo(() => itemIssues(rows), [rows]);
   const savable = items.length;
 
+  const draftKey = mode === 'edit' && orderId ? `order:${orderId}` : 'order:new';
   const draftSnapshot = useMemo(() => ({ customerId, rows, columns }), [customerId, rows, columns]);
-  const { draft, clear: clearDraft } = useFormDraft('order:new', draftSnapshot);
+  const { draft, clear: clearDraft } = useFormDraft(draftKey, draftSnapshot);
   const [draftDismissed, setDraftDismissed] = useState(false);
   const showRestore = !draftDismissed && !!draft
     && ((draft.rows?.some((r) => r.description?.trim()) ?? false) || (draft.columns?.length ?? 0) > 0);
@@ -58,6 +67,7 @@ export function OrderForm({
     <form action={action} onSubmit={onSubmit} className="flex flex-col gap-5">
       <input type="hidden" name="items" value={itemsJson} />
       <input type="hidden" name="columnDefs" value={columnDefsJson} />
+      {mode === 'edit' && <input type="hidden" name="id" value={orderId} />}
 
       {showRestore && (
         <div className="flex flex-wrap items-center gap-3 rounded-lg border border-accent/40 bg-accent-soft/30 px-4 py-2.5 text-sm">
@@ -69,28 +79,36 @@ export function OrderForm({
       )}
 
       <div className="card p-4 grid grid-cols-2 md:grid-cols-4 gap-3">
-        <div className="col-span-2">
-          <label className="label">Customer *</label>
-          <select name="customerId" required value={customerId} onChange={(e) => setCustomerId(e.target.value)} className="field">
-            <option value="">Select customer…</option>
-            {customers.map((c) => <option key={c.id} value={c.id}>{c.name}{c.stateCode ? ` — state ${c.stateCode}` : ''}</option>)}
-          </select>
-        </div>
-        <div><label className="label">Order date *</label><input name="docDate" type="date" defaultValue={today} required className="field" /></div>
-        <div><label className="label">Delivery date</label><input name="deliveryDate" type="date" className="field" /></div>
+        {mode === 'edit' ? (
+          <div className="col-span-2">
+            <label className="label">Customer</label>
+            <input type="hidden" name="customerId" value={customerId} />
+            <div className="field bg-surface-2 text-muted">{cust?.name ?? '—'}</div>
+          </div>
+        ) : (
+          <div className="col-span-2">
+            <label className="label">Customer *</label>
+            <select name="customerId" required value={customerId} onChange={(e) => setCustomerId(e.target.value)} className="field">
+              <option value="">Select customer…</option>
+              {customers.map((c) => <option key={c.id} value={c.id}>{c.name}{c.stateCode ? ` — state ${c.stateCode}` : ''}</option>)}
+            </select>
+          </div>
+        )}
+        <div><label className="label">Order date *</label><input name="docDate" type="date" defaultValue={initial?.docDate ?? today} required className="field" /></div>
+        <div><label className="label">Delivery date</label><input name="deliveryDate" type="date" defaultValue={initial?.deliveryDate ?? ''} className="field" /></div>
         <div className="col-span-2 md:col-span-2">
           <label className="label">Customer PO ref</label>
-          <input name="poRef" className="field" placeholder="PO number / reference" />
+          <input name="poRef" defaultValue={initial?.poRef ?? ''} className="field" placeholder="PO number / reference" />
         </div>
         <div>
           <label className="label">Category</label>
-          <select name="orderCategory" defaultValue="tool_build" className="field">
+          <select name="orderCategory" defaultValue={initial?.orderCategory ?? 'tool_build'} className="field">
             {ORDER_CATEGORIES.map((c) => <option key={c} value={c}>{ORDER_CATEGORY_LABELS[c]}</option>)}
           </select>
         </div>
         <div>
           <label className="label">Material</label>
-          <select name="materialOwnership" defaultValue="customer" className="field">
+          <select name="materialOwnership" defaultValue={initial?.materialOwnership ?? 'customer'} className="field">
             {MATERIAL_OWNERSHIP.map((m) => <option key={m} value={m}>{MATERIAL_OWNERSHIP_LABELS[m]}</option>)}
           </select>
         </div>
@@ -122,7 +140,7 @@ export function OrderForm({
         </div>
       )}
       <div className="flex items-center gap-3">
-        <SubmitButton className="btn-primary" disabled={issues.length > 0}>Create order</SubmitButton>
+        <SubmitButton className="btn-primary" disabled={issues.length > 0}>{mode === 'edit' ? 'Save changes' : 'Create order'}</SubmitButton>
         <span className="text-xs text-faint">{savable} line{savable === 1 ? '' : 's'} will be saved</span>
       </div>
     </form>

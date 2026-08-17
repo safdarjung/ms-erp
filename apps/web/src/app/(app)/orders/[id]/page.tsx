@@ -38,6 +38,9 @@ export default async function OrderDetail({ params }: { params: Promise<{ id: st
             : <OrderStatusSelect id={o.id} status={o.status} />}
         </div>
         <div className="flex gap-2">
+          {!invoiced && o.status !== 'cancelled' && can(user, 'order.edit') && (
+            <Link href={`/orders/${o.id}/edit`} className="btn-ghost">Edit</Link>
+          )}
           {can(user, 'order.create') && (
             <form action={duplicateOrderAction}>
               <input type="hidden" name="id" value={o.id} />

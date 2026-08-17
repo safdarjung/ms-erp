@@ -5,9 +5,13 @@ import { SubmitButton } from '@/components/submit-button';
 import { AiPolishButton } from '@/components/ai-polish-button';
 import { LineItemsEditor, emptyRow, serializeItems, cleanColumns, itemIssues, type LineRow } from '@/components/line-items-editor';
 import { useFormDraft } from '@/components/use-form-draft';
-import { createInvoiceAction, type ActionState } from './actions';
+import { createInvoiceAction, updateInvoiceAction, type ActionState } from './actions';
 
 type Cust = { id: string; name: string; stateCode: string | null; gstin: string | null };
+
+export type InvoiceInitial = {
+  customerId: string; docDate: string; poRef: string; terms: string; rows: LineRow[]; columnDefs?: ColumnDef[];
+};
 
 export function InvoiceForm({
   customers,
@@ -15,18 +19,24 @@ export function InvoiceForm({
   defaultTerms,
   aiEnabled,
   defaultCustomerId = '',
+  mode = 'create',
+  invoiceId,
+  initial,
 }: {
   customers: Cust[];
   supplierStateCode: string;
   defaultTerms: string;
   aiEnabled: boolean;
   defaultCustomerId?: string;
+  mode?: 'create' | 'edit';
+  invoiceId?: string;
+  initial?: InvoiceInitial;
 }) {
-  const [state, action] = useActionState<ActionState, FormData>(createInvoiceAction, {});
-  const [customerId, setCustomerId] = useState(defaultCustomerId);
-  const [rows, setRows] = useState<LineRow[]>([emptyRow()]);
-  const [columns, setColumns] = useState<ColumnDef[]>([]);
-  const [terms, setTerms] = useState(defaultTerms);
+  const [state, action] = useActionState<ActionState, FormData>(mode === 'edit' ? updateInvoiceAction : createInvoiceAction, {});
+  const [customerId, setCustomerId] = useState(initial?.customerId ?? defaultCustomerId);
+  const [rows, setRows] = useState<LineRow[]>(initial?.rows?.length ? initial.rows : [emptyRow()]);
+  const [columns, setColumns] = useState<ColumnDef[]>(initial?.columnDefs ?? []);
+  const [terms, setTerms] = useState(initial?.terms ?? defaultTerms);
   const today = new Date().toISOString().slice(0, 10);
 
   const cust = customers.find((c) => c.id === customerId);
@@ -37,8 +47,9 @@ export function InvoiceForm({
   const issues = useMemo(() => itemIssues(rows), [rows]);
   const savable = items.length;
 
+  const draftKey = mode === 'edit' && invoiceId ? `invoice:${invoiceId}` : 'invoice:new';
   const draftSnapshot = useMemo(() => ({ customerId, rows, columns, terms }), [customerId, rows, columns, terms]);
-  const { draft, clear: clearDraft } = useFormDraft('invoice:new', draftSnapshot);
+  const { draft, clear: clearDraft } = useFormDraft(draftKey, draftSnapshot);
   const [draftDismissed, setDraftDismissed] = useState(false);
   const showRestore = !draftDismissed && !!draft
     && ((draft.rows?.some((r) => r.description?.trim()) ?? false) || (draft.columns?.length ?? 0) > 0);
@@ -64,6 +75,7 @@ export function InvoiceForm({
     <form action={action} onSubmit={onSubmit} className="flex flex-col gap-5">
       <input type="hidden" name="items" value={itemsJson} />
       <input type="hidden" name="columnDefs" value={columnDefsJson} />
+      {mode === 'edit' && <input type="hidden" name="id" value={invoiceId} />}
 
       {showRestore && (
         <div className="flex flex-wrap items-center gap-3 rounded-lg border border-accent/40 bg-accent-soft/30 px-4 py-2.5 text-sm">
@@ -75,17 +87,25 @@ export function InvoiceForm({
       )}
 
       <div className="card p-4 grid grid-cols-2 md:grid-cols-4 gap-3">
-        <div className="col-span-2">
-          <label className="label">Customer *</label>
-          <select name="customerId" required value={customerId} onChange={(e) => setCustomerId(e.target.value)} className="field">
-            <option value="">Select customer…</option>
-            {customers.map((c) => (
-              <option key={c.id} value={c.id}>{c.name}{c.stateCode ? ` — state ${c.stateCode}` : ''}</option>
-            ))}
-          </select>
-        </div>
-        <div><label className="label">Date *</label><input name="docDate" type="date" defaultValue={today} required className="field" /></div>
-        <div><label className="label">PO ref</label><input name="poRef" className="field" placeholder="optional" /></div>
+        {mode === 'edit' ? (
+          <div className="col-span-2">
+            <label className="label">Customer</label>
+            <input type="hidden" name="customerId" value={customerId} />
+            <div className="field bg-surface-2 text-muted">{cust?.name ?? '—'}</div>
+          </div>
+        ) : (
+          <div className="col-span-2">
+            <label className="label">Customer *</label>
+            <select name="customerId" required value={customerId} onChange={(e) => setCustomerId(e.target.value)} className="field">
+              <option value="">Select customer…</option>
+              {customers.map((c) => (
+                <option key={c.id} value={c.id}>{c.name}{c.stateCode ? ` — state ${c.stateCode}` : ''}</option>
+              ))}
+            </select>
+          </div>
+        )}
+        <div><label className="label">Date *</label><input name="docDate" type="date" defaultValue={initial?.docDate ?? today} required className="field" /></div>
+        <div><label className="label">PO ref</label><input name="poRef" defaultValue={initial?.poRef ?? ''} className="field" placeholder="optional" /></div>
       </div>
 
       <LineItemsEditor rows={rows} setRows={setRows} columns={columns} setColumns={setColumns} />
@@ -132,7 +152,7 @@ export function InvoiceForm({
         </div>
       )}
       <div className="flex items-center gap-3">
-        <SubmitButton className="btn-primary" disabled={issues.length > 0}>Create invoice</SubmitButton>
+        <SubmitButton className="btn-primary" disabled={issues.length > 0}>{mode === 'edit' ? 'Save changes' : 'Create invoice'}</SubmitButton>
         <span className="text-xs text-faint">{savable} line{savable === 1 ? '' : 's'} will be saved</span>
       </div>
     </form>

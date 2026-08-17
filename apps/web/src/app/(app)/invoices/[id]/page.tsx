@@ -33,6 +33,9 @@ export default async function InvoiceDetail({ params }: { params: Promise<{ id: 
           {inv.status !== 'cancelled' && <StatusPill status={ps.state} label={PAYMENT_STATE_LABELS[ps.state]} />}
         </div>
         <div className="flex gap-2">
+          {canEdit && inv.status !== 'cancelled' && (
+            <Link href={`/invoices/${inv.id}/edit`} className="btn-ghost">Edit</Link>
+          )}
           <a href={`/print/invoice/${inv.id}`} target="_blank" rel="noreferrer" className="btn-ghost">Preview</a>
           <a href={`/print/invoice/${inv.id}?print=1`} target="_blank" rel="noreferrer" className="btn-primary">Print / Save PDF</a>
         </div>

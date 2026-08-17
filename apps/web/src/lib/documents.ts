@@ -233,6 +233,53 @@ export async function insertOrderTx(
   return { id: o!.id, number, total: subtotal };
 }
 
+export type OrderEdit = {
+  docDate?: string;
+  poRef?: string;
+  orderCategory?: OrderInput['orderCategory'];
+  materialOwnership?: OrderInput['materialOwnership'];
+  deliveryDate?: string;
+  columnDefs?: ColumnDef[];
+  items?: {
+    description: string; hsn?: string; qty: number; uom: string;
+    rate: number; gstRate: number; groupLabel?: string; attributes?: Record<string, string>;
+  }[];
+};
+
+/** Edit a sales order in place (same number). Items replace wholesale; total recomputes.
+ *  Locked once invoiced or cancelled. */
+export async function updateOrderTx(
+  tx: Tx, u: U, id: string, d: OrderEdit,
+): Promise<{ number: string; total: number }> {
+  const [o] = await tx.select().from(salesOrder).where(eq(salesOrder.id, id)).limit(1);
+  if (!o) throw new Error('Order not found');
+  if (o.convertedInvoiceId) throw new Error(`${o.number} is invoiced and locked.`);
+  if (o.status === 'cancelled') throw new Error(`${o.number} is cancelled and locked.`);
+
+  const set: Record<string, unknown> = { updatedAt: new Date() };
+  if (d.docDate !== undefined) set.docDate = new Date(d.docDate);
+  if (d.poRef !== undefined) set.poRef = d.poRef;
+  if (d.orderCategory !== undefined) set.orderCategory = d.orderCategory;
+  if (d.materialOwnership !== undefined) set.materialOwnership = d.materialOwnership;
+  if (d.deliveryDate !== undefined) set.deliveryDate = d.deliveryDate ? new Date(d.deliveryDate) : null;
+  if (d.columnDefs !== undefined) set.columnDefs = d.columnDefs;
+
+  let total = Number(o.totalValue);
+  if (d.items) {
+    total = r2(d.items.reduce((s, it) => s + it.qty * it.rate, 0));
+    set.totalValue = String(total);
+    await tx.delete(orderItem).where(eq(orderItem.orderId, id));
+    await tx.insert(orderItem).values(d.items.map((it, i) => ({
+      tenantId: u.tenantId, orderId: id, seq: i + 1, description: it.description, hsn: it.hsn,
+      qty: String(it.qty), uom: it.uom, rate: String(it.rate), gstRate: String(it.gstRate),
+      taxableValue: String(r2(it.qty * it.rate)),
+      groupLabel: it.groupLabel ?? null, attributes: it.attributes ?? {},
+    })));
+  }
+  await tx.update(salesOrder).set(set).where(eq(salesOrder.id, id));
+  return { number: o.number, total };
+}
+
 type OrderConvertMeta = { orderCategory?: OrderInput['orderCategory']; materialOwnership?: OrderInput['materialOwnership']; poRef?: string; deliveryDate?: string };
 
 /** Quotation → sales order. Idempotent: an already-ordered quotation returns its order. */
