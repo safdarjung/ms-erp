@@ -1,9 +1,9 @@
 import { Type, type Content, type FunctionDeclaration, type Part, type Schema } from '@google/genai';
 import {
-  MAX_TOOL_ROUNDS, TOOL_META, runActionTool, runChartTool, runOpenPageTool, runQueryTool,
-  type AssistantContext, type AssistantEvent, type ChartSpec, type ChatTurn, type TurnState,
+  MAX_TOOL_ROUNDS, TOOL_META, runActionTool, runChartTool, runGetDocumentTool, runOpenPageTool, runQueryTool,
+  type AssistantContext, type AssistantEvent, type ChartSpec, type ChatTurn, type GetDocumentInput, type TurnState,
 } from './assistant-core';
-import { ACTION_TOOLS, ACTION_TOOL_NAMES, OPEN_PAGE_TOOL, type ActionToolDef, type JsonSchemaProp } from './agent-tools';
+import { ACTION_TOOLS, ACTION_TOOL_NAMES, GET_DOCUMENT_TOOL, OPEN_PAGE_TOOL, type ActionToolDef, type JsonSchemaProp } from './agent-tools';
 import { GEMINI_MODELS, addTokenUsage, gemini, isGeminiRateLimit, usageFromGemini } from './gemini';
 import { emptyUsage } from './models';
 import { ASSISTANT_SYSTEM_PROMPT } from './schema-context';
@@ -59,6 +59,7 @@ const FUNCTIONS: FunctionDeclaration[] = [
       required: ['title', 'kind', 'labels', 'values'],
     },
   },
+  toGeminiFunction(GET_DOCUMENT_TOOL),
   toGeminiFunction(OPEN_PAGE_TOOL),
   ...ACTION_TOOLS.map(toGeminiFunction),
 ];
@@ -150,6 +151,10 @@ export async function* runGeminiAssistant(
         payload = out.payload;
       } else if (c.name === OPEN_PAGE_TOOL.name) {
         const out = runOpenPageTool((c.args ?? {}) as { page?: string; id?: string });
+        for (const ev of out.events) yield ev;
+        payload = out.payload;
+      } else if (c.name === GET_DOCUMENT_TOOL.name) {
+        const out = await runGetDocumentTool((c.args ?? {}) as GetDocumentInput, ctx);
         for (const ev of out.events) yield ev;
         payload = out.payload;
       } else if (c.name && ACTION_TOOL_NAMES.has(c.name)) {

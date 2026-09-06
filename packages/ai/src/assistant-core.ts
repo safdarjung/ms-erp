@@ -25,10 +25,23 @@ export type EditField = {
 export type EditItem = {
   description: string; hsn?: string; qty: number; uom?: string; rate: number; gstRate: number;
   isToolingCharge?: boolean;
-  /** Part/section this line sits under (blank = ungrouped). */
+  /** Part this line sits under (blank = no part). */
   groupLabel?: string;
-  /** Custom-column values keyed by columnDef.id. */
+  /** Detail printed beside the part heading (drawing no., material…). */
+  groupNote?: string;
+  /** Custom-field values keyed by columnDef.id. */
   attributes?: Record<string, string>;
+};
+
+/** What the confirmation card needs to render + edit a document proposal. */
+export type StagedDocMeta = {
+  type: 'quotation' | 'invoice' | 'order';
+  /** Inter-state supply → IGST, else CGST + SGST (orders: ex-GST only). */
+  interstate: boolean;
+  /** Whether lines may carry the one-time tooling / NRE flag. */
+  tooling: boolean;
+  /** Document number when editing an existing record. */
+  number?: string;
 };
 
 /** A write the agent proposed, staged server-side, awaiting user confirmation. */
@@ -39,6 +52,8 @@ export type StagedAction = {
   details: { label: string; value: string }[];
   /** Line-item preview rows (documents). */
   items?: string[];
+  /** Human-readable change list for edits of an existing document. */
+  changes?: string[];
   warning?: string;
   /** Present when the user may edit the proposal inline before confirming. */
   editable?: EditField[];
@@ -46,10 +61,18 @@ export type StagedAction = {
   payload?: Record<string, unknown>;
   /** Structured line items to edit (documents). */
   editItems?: EditItem[];
+  /** Document rendering/editing hints (documents). */
+  doc?: StagedDocMeta;
 };
 
 export type StageResult =
   | { ok: true; action: StagedAction }
+  | { ok: false; error: string };
+
+/** get_document lookup — the web layer shapes the snapshot for the model. */
+export type GetDocumentInput = { type?: string; id?: string; number?: string };
+export type GetDocumentResult =
+  | { ok: true; document: Record<string, unknown> }
   | { ok: false; error: string };
 
 export type AssistantEvent =
@@ -102,6 +125,8 @@ export type AssistantContext = {
   executeQuery: (wrappedSql: string) => Promise<QueryResult>;
   /** Validate + persist a proposed write as a pending ai_action row. */
   stageAction: (kind: string, input: Record<string, unknown>) => Promise<StageResult>;
+  /** Read one document in full for the model (tenant-scoped). */
+  getDocument: (input: GetDocumentInput) => Promise<GetDocumentResult>;
   signal?: AbortSignal;
 };
 
@@ -177,6 +202,38 @@ export type TurnState = { chartShown: boolean; actionPending: boolean };
 
 const ACTION_PERMISSION = new Map(ACTION_TOOLS.map((t) => [t.name, t.permission]));
 
+/** What a missing permission stops the user doing, in shop words — for a one-sentence refusal. */
+const PERMISSION_VERB: Record<string, string> = {
+  'customer.create': 'add customers',
+  'customer.edit': 'change customer details',
+  'customer.delete': 'delete customers',
+  'lead.create': 'add enquiries',
+  'lead.edit': 'change enquiries',
+  'lead.delete': 'delete enquiries',
+  'quotation.create': 'create quotations',
+  'quotation.edit': 'change quotations',
+  'invoice.create': 'make bills',
+  'invoice.edit': 'change bills or record payments',
+  'order.create': 'make orders',
+  'order.edit': 'change orders',
+};
+const permissionSentence = (permission: string) =>
+  `Your login can’t ${PERMISSION_VERB[permission] ?? 'do that'} — ask the owner for access.`;
+
+/** Handle get_document: read-only, instant; the model gets the full snapshot. */
+export async function runGetDocumentTool(input: GetDocumentInput, ctx: AssistantContext): Promise<ToolOutcome> {
+  const what = input.type === 'invoice' ? 'invoice' : input.type === 'order' ? 'order' : 'quotation';
+  const label = `Reading ${what}${input.number ? ` ${input.number}` : ''}`;
+  const events: AssistantEvent[] = [{ type: 'tool', label }];
+  try {
+    const res = await ctx.getDocument(input);
+    if (!res.ok) return { events, isError: true, payload: { error: res.error } };
+    return { events, isError: false, payload: res.document };
+  } catch (e) {
+    return { events, isError: true, payload: { error: `Could not read the document: ${e instanceof Error ? e.message : 'unknown error'}` } };
+  }
+}
+
 /** Handle open_page: resolve, surface a nav event, tell the model it happened. */
 export function runOpenPageTool(input: { page?: string; id?: string }): ToolOutcome {
   const nav = resolvePage(input);
@@ -203,13 +260,16 @@ export async function runActionTool(
   if (permission && !ctx.permissions.has(permission)) {
     return {
       events: [], isError: true,
-      payload: { error: `The user does not have the "${permission}" permission — tell them so and do not retry.` },
+      payload: {
+        error: permissionSentence(permission),
+        note: 'Say exactly this sentence to the user and do not retry.',
+      },
     };
   }
   if (state.actionPending) {
     return {
       events: [], isError: true,
-      payload: { error: 'An action is already awaiting the user’s confirmation. Do not propose another one — end your reply.' },
+      payload: { error: 'A card is already waiting for the user to tap Yes. Do not propose another one — end your reply.' },
     };
   }
 
@@ -223,9 +283,11 @@ export async function runActionTool(
     payload: {
       staged: true,
       summary: staged.action.title,
+      changes: staged.action.changes,
       note:
-        'Proposed to the user — a confirmation card with full details is on their screen. ' +
-        'In one short sentence tell them what you proposed and to confirm or cancel, then STOP (no more tool calls this turn). ' +
+        'Proposed to the user — a confirmation card with full details is on their screen' +
+        (staged.action.doc ? ' (a document preview with totals; they can tap "Check or change the lines" to fine-tune any line before saying yes)' : '') +
+        '. Tell them in one short sentence what the card will save and to tap Yes (or Not now), then STOP (no more tool calls this turn). ' +
         'You will get the result after they decide.',
     },
   };

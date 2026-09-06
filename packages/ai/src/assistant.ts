@@ -2,10 +2,10 @@ import type Anthropic from '@anthropic-ai/sdk';
 import { activeProvider, anthropic } from './client';
 import { AI_MODELS, addUsage, emptyUsage } from './models';
 import { ASSISTANT_SYSTEM_PROMPT } from './schema-context';
-import { ACTION_TOOLS, ACTION_TOOL_NAMES, OPEN_PAGE_TOOL, type ActionToolDef } from './agent-tools';
+import { ACTION_TOOLS, ACTION_TOOL_NAMES, GET_DOCUMENT_TOOL, OPEN_PAGE_TOOL, type ActionToolDef } from './agent-tools';
 import {
-  MAX_TOOL_ROUNDS, TOOL_META, runActionTool, runChartTool, runOpenPageTool, runQueryTool,
-  type AssistantContext, type AssistantEvent, type ChartSpec, type ChatTurn, type TurnState,
+  MAX_TOOL_ROUNDS, TOOL_META, runActionTool, runChartTool, runGetDocumentTool, runOpenPageTool, runQueryTool,
+  type AssistantContext, type AssistantEvent, type ChartSpec, type ChatTurn, type GetDocumentInput, type TurnState,
 } from './assistant-core';
 import { runGeminiAssistant } from './gemini-assistant';
 
@@ -52,6 +52,7 @@ const TOOLS: Anthropic.Messages.ToolUnion[] = [
       additionalProperties: false,
     },
   },
+  toAnthropicTool(GET_DOCUMENT_TOOL),
   toAnthropicTool(OPEN_PAGE_TOOL),
   ...ACTION_TOOLS.map(toAnthropicTool),
 ];
@@ -162,6 +163,11 @@ async function* runClaudeAssistant(
         isError = out.isError;
       } else if (tu.name === OPEN_PAGE_TOOL.name) {
         const out = runOpenPageTool(tu.input as { page?: string; id?: string });
+        for (const ev of out.events) yield ev;
+        payload = out.payload;
+        isError = out.isError;
+      } else if (tu.name === GET_DOCUMENT_TOOL.name) {
+        const out = await runGetDocumentTool(tu.input as GetDocumentInput, ctx);
         for (const ev of out.events) yield ev;
         payload = out.payload;
         isError = out.isError;

@@ -64,10 +64,23 @@ const ITEM_FIELDS: Record<string, JsonSchemaProp> = {
   uom: { type: 'string', description: 'NOS, SET, KG, HRS…' },
   rate: { type: 'number', description: 'Unit rate in INR, ex-GST' },
   gstRate: { type: 'number', description: 'GST percent — 18 unless the user or history says otherwise' },
-  groupLabel: { type: 'string', description: 'Optional part/section this line belongs to, e.g. "Part 1 — Bracket LH". Rows sharing a label are grouped under it with a subtotal. Omit for ungrouped lines.' },
+  groupLabel: {
+    type: 'string',
+    description:
+      'The PART this line belongs to, e.g. "30017AW1002" or "Bracket LH". Every item made for the same part carries the same value and they print together under one heading with a subtotal. ' +
+      'Omit only for standalone lines (e.g. a trial/proving charge).',
+  },
+  groupNote: {
+    type: 'string',
+    description:
+      "Detail about the PART itself, printed beside its heading — drawing no., component name, material, sheet thickness, e.g. \"Drawing DRG-114 · MS 2mm\". Send the same text on every line of that part. Don't put per-item specs here; those go in attributes.",
+  },
   attributes: {
     type: 'array',
-    description: 'Optional extra descriptive columns for THIS line, as {name,value} pairs, e.g. [{"name":"Steel grade","value":"D2"},{"name":"Cavities","value":"2"}]. Reuse the SAME name across lines so values line up into one column. Descriptive only — never affects price or GST. Use when the user asks for extra columns like material/steel/cavities/drawing no.',
+    description:
+      'Specs for THIS item, as {name,value} pairs — e.g. [{"name":"Material","value":"D2"},{"name":"Hardness","value":"58-60 HRC"},{"name":"Size","value":"200x150x25"}]. ' +
+      'Reuse the SAME name across items so they line up as one field (up to 16 per document). Short values (1–2 fields) print as their own column; more than that print under the item description, so give as many specs as the user mentioned. ' +
+      'Descriptive only — never affects price or GST.',
     items: {
       type: 'object',
       properties: {
@@ -79,16 +92,108 @@ const ITEM_FIELDS: Record<string, JsonSchemaProp> = {
   },
 };
 
+const ITEM_FIELDS_TOOLING: Record<string, JsonSchemaProp> = {
+  ...ITEM_FIELDS,
+  isToolingCharge: { type: 'boolean', description: 'True for a one-time tooling / NRE line' },
+};
+
 const itemsProp = (tooling: boolean): JsonSchemaProp => ({
   type: 'array',
-  description: 'Line items (1–15). Taxable values, GST split and totals are computed by the app — never by you.',
+  description: 'Line items (1–60). Taxable values, GST split and totals are computed by the app — never by you.',
   items: {
     type: 'object',
-    properties: tooling
-      ? { ...ITEM_FIELDS, isToolingCharge: { type: 'boolean', description: 'True for a one-time tooling / NRE line' } }
-      : ITEM_FIELDS,
+    properties: tooling ? ITEM_FIELDS_TOOLING : ITEM_FIELDS,
     required: ['description', 'qty', 'rate'],
   },
+});
+
+// ── Line-level edit operations (update_* / duplicate_quotation) ─────────────
+// The model names lines by the S.No printed on the document and says WHAT
+// changes; the server resolves the ops into the full new line list and shows
+// the user a change list. Far more reliable than re-sending 30 lines.
+
+const EDIT_OP: JsonSchemaProp = {
+  type: 'object',
+  description:
+    'One edit. Every `line` / `lines` / `toLine` / `afterLine` number is the S.No printed on the document BEFORE this batch ' +
+    '(exactly as get_document returned it) — plan all edits from one read; lines added in this batch cannot be targeted by later ops.',
+  properties: {
+    op: {
+      type: 'string',
+      enum: ['update', 'add', 'remove', 'move', 'adjust_rates', 'set_gst', 'set_group', 'rename_group', 'set_group_note',
+        'set_specs', 'set_column', 'set_column_display', 'rename_column', 'remove_column'],
+      description:
+        'update = change fields of one line (pass only the fields that change) · add = insert a new line (`item`) · remove = delete one line · ' +
+        'move = reorder (`line` → `toLine`) · adjust_rates = change rates by `percent` or `amount` on `lines` / a part (`groupLabel`) / all · ' +
+        'set_gst = set `gstRate` on `lines` / a part / all · set_group = put `lines` under part `groupLabel` ("" = no part) · ' +
+        'rename_group = rename a part (`from` → `to`) · set_group_note = set the part detail (`groupLabel` + `note`; "" clears it) · ' +
+        'set_specs = write the same spec values (`specs`) on `lines` / a whole part / all — the quick way to say "every die of this part is D2, 58-60 HRC" · ' +
+        'set_column = create/fill one field `name` with per-line `values` · set_column_display = show a field as its own column or under the item (`name` + `display`) · ' +
+        'rename_column (`from` → `to`) · remove_column (`name`)',
+    },
+    line: { type: 'integer', description: 'Target line S.No (update / remove / move). For adjust_rates / set_gst a single-line scope.' },
+    lines: { type: 'array', items: { type: 'integer' }, description: 'Several target lines (adjust_rates / set_gst / set_group)' },
+    groupLabel: {
+      type: 'string',
+      description: 'update/add/move: the part this line belongs to ("" = no part). adjust_rates/set_gst/set_specs: scope = every line of this part. set_group / set_group_note: the part concerned.',
+    },
+    note: {
+      type: 'string',
+      description: 'set_group_note (also set_group / add): the part detail printed beside its heading, e.g. "Drawing DRG-114 · MS 2mm". "" removes it.',
+    },
+    specs: {
+      type: 'array',
+      description: 'set_specs: field values written to every line in scope, as {name,value} pairs. An empty value clears that field on those lines.',
+      items: {
+        type: 'object',
+        properties: { name: { type: 'string' }, value: { type: 'string' } },
+        required: ['name', 'value'],
+      },
+    },
+    display: {
+      type: 'string',
+      enum: ['column', 'spec'],
+      description: "set_column_display (also set_column when creating one): 'column' gives the field its own table column (only for short values); 'spec' prints it under the item description.",
+    },
+    toLine: { type: 'integer', description: 'move: the printed position the line should end up at' },
+    afterLine: { type: 'integer', description: 'add: insert after this line (0 = at the top). Omit to append at the end of the given part, else at the end of the document.' },
+    item: { type: 'object', description: 'add: the new line', properties: ITEM_FIELDS_TOOLING, required: ['description', 'qty', 'rate'] },
+    description: { type: 'string', description: 'update: new description' },
+    hsn: { type: 'string', description: 'update: new HSN/SAC' },
+    qty: { type: 'number', description: 'update: new quantity' },
+    uom: { type: 'string', description: 'update: new unit' },
+    rate: { type: 'number', description: 'update: new ex-GST unit rate (INR)' },
+    gstRate: { type: 'number', description: 'update: new GST % for that line · set_gst: the GST % to apply' },
+    isToolingCharge: { type: 'boolean', description: 'update: mark/unmark as a one-time tooling / NRE line (quotations)' },
+    attributes: {
+      type: 'array', description: 'update: custom-column values for this line as {name,value} pairs (a new name creates the column)',
+      items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'] },
+    },
+    percent: { type: 'number', description: 'adjust_rates: change rates by this percent (+5 = 5% up, -10 = 10% discount)' },
+    amount: { type: 'number', description: 'adjust_rates: add this ₹ amount to each rate (negative to reduce)' },
+    roundTo: { type: 'number', description: 'adjust_rates: round the new rates to a multiple of this (e.g. 100 or 500)' },
+    from: { type: 'string', description: 'rename_group / rename_column: current name' },
+    to: { type: 'string', description: 'rename_group / rename_column: new name' },
+    name: { type: 'string', description: 'set_column / remove_column: the column name' },
+    values: {
+      type: 'array', description: 'set_column: per-line values ({line, value}); an empty value clears the cell',
+      items: { type: 'object', properties: { line: { type: 'integer' }, value: { type: 'string' } }, required: ['line', 'value'] },
+    },
+  },
+  required: ['op'],
+};
+
+const editsProp: JsonSchemaProp = {
+  type: 'array',
+  description:
+    'Line-level edits applied to the CURRENT lines, in order (read them with get_document first). Preferred over `items` for any change ' +
+    'that keeps most of the document — one rate, a few lines, "+5% on everything", rename a part, add a column. Never send both `edits` and `items`.',
+  items: EDIT_OP,
+};
+
+const uuidOptional = (what: string): JsonSchemaProp => ({
+  type: 'string',
+  description: `UUID of the ${what} (from a query result / current page) — optional`,
 });
 
 // ── The registry ────────────────────────────────────────────────────────────
@@ -175,19 +280,38 @@ export const ACTION_TOOLS: ActionToolDef[] = [
   {
     name: 'update_quotation',
     description:
-      'Edit an existing quotation (same number): change items, terms, notes, date or validity. ' +
-      'The items array REPLACES all existing lines — query quotation_item first and resend unchanged lines too. ' +
-      'Totals & GST recompute automatically. Converted quotations are locked.',
+      'Edit an existing quotation (same number). Lines: pass `edits` (line-level ops against the current lines — read them with get_document first) ' +
+      'or, only when rebuilding the whole document, `items` (REPLACES every line). Header: terms, notes, date, validity — omit to keep. ' +
+      'Totals & GST recompute automatically; the user sees a change list and can fine-tune on the card. Converted / ordered quotations are locked.',
     permission: 'quotation.edit',
     properties: {
       id: uuid('quotation'),
       docDate: { type: 'string', description: 'New document date YYYY-MM-DD (omit to keep)' },
       validityDays: { type: 'integer' },
       terms: { type: 'string', description: 'Full replacement terms, one per line (omit to keep)' },
-      notes: { type: 'string' },
+      notes: { type: 'string', description: 'Replacement notes (omit to keep)' },
+      edits: editsProp,
       items: itemsProp(true),
     },
     required: ['id'],
+  },
+  {
+    name: 'duplicate_quotation',
+    description:
+      'Create a NEW quotation by copying an existing one — every line, part (with its detail), every item spec, extra field, terms and notes — optionally for a ' +
+      'different customer and with `edits` applied to the copy (e.g. rates +5%, drop a line). The original is untouched. ' +
+      'Use for repeat jobs and "same as QT/… but …" requests. Gets today\'s date and the next number.',
+    permission: 'quotation.create',
+    properties: {
+      quotationId: uuid('source quotation'),
+      customerId: uuidOptional('customer the copy is for (omit = same customer)'),
+      docDate: { type: 'string', description: 'Document date YYYY-MM-DD; omit for today' },
+      validityDays: { type: 'integer', description: 'Omit to keep the source validity' },
+      terms: { type: 'string', description: 'Replacement terms, one per line (omit to copy)' },
+      notes: { type: 'string', description: 'Replacement notes (omit to copy)' },
+      edits: editsProp,
+    },
+    required: ['quotationId'],
   },
   {
     name: 'set_quotation_status',
@@ -216,6 +340,7 @@ export const ACTION_TOOLS: ActionToolDef[] = [
       docDate: { type: 'string', description: 'Document date YYYY-MM-DD; omit for today' },
       poRef: { type: 'string', description: "Customer's PO reference, if any" },
       terms: { type: 'string', description: 'Terms, one per line' },
+      notes: { type: 'string', description: 'Note printed on the invoice (optional)' },
       items: itemsProp(false),
     },
     required: ['customerId', 'items'],
@@ -223,16 +348,17 @@ export const ACTION_TOOLS: ActionToolDef[] = [
   {
     name: 'update_invoice',
     description:
-      'Edit an existing tax invoice / bill (same number): change items, terms, notes, date or PO ref. ' +
-      'The items array REPLACES all existing lines — query tax_invoice_item first and resend unchanged lines too. ' +
-      'Tax figures recompute automatically. Cancelled invoices are locked.',
+      'Edit an existing tax invoice / bill (same number). Lines: pass `edits` (line-level ops against the current lines — read them with get_document first) ' +
+      'or, only when rebuilding the whole document, `items` (REPLACES every line). Header: terms, notes, date, PO ref — omit to keep. ' +
+      'Tax figures recompute automatically; the user sees a change list and can fine-tune on the card. Cancelled invoices are locked.',
     permission: 'invoice.edit',
     properties: {
       id: uuid('invoice'),
       docDate: { type: 'string', description: 'New document date YYYY-MM-DD (omit to keep)' },
       poRef: { type: 'string' },
       terms: { type: 'string', description: 'Full replacement terms, one per line (omit to keep)' },
-      notes: { type: 'string' },
+      notes: { type: 'string', description: 'Replacement notes (omit to keep)' },
+      edits: editsProp,
       items: itemsProp(false),
     },
     required: ['id'],
@@ -301,6 +427,24 @@ export const ACTION_TOOLS: ActionToolDef[] = [
     required: ['customerId', 'items'],
   },
   {
+    name: 'update_order',
+    description:
+      'Edit an existing sales order (same number): lines via `edits` (read them with get_document first) or a full `items` replacement; ' +
+      'PO ref, delivery date, category, material ownership, date — omit to keep. Locked once invoiced or cancelled.',
+    permission: 'order.edit',
+    properties: {
+      id: uuid('sales order'),
+      docDate: { type: 'string', description: 'New order date YYYY-MM-DD (omit to keep)' },
+      deliveryDate: { type: 'string', description: 'Promised delivery date YYYY-MM-DD ("" to clear)' },
+      poRef: { type: 'string' },
+      orderCategory: { type: 'string', enum: ['job_work', 'own_manufacture', 'tool_build', 'repair'] },
+      materialOwnership: { type: 'string', enum: ['customer', 'company'] },
+      edits: editsProp,
+      items: itemsProp(false),
+    },
+    required: ['id'],
+  },
+  {
     name: 'set_order_status',
     description: 'Move a sales order between open / in production / delivered / closed / cancelled.',
     permission: 'order.edit',
@@ -323,6 +467,28 @@ export const ACTION_TOOLS: ActionToolDef[] = [
 ];
 
 export const ACTION_TOOL_NAMES = new Set(ACTION_TOOLS.map((t) => t.name));
+
+// ── Read a document in full (instant, not staged) ───────────────────────────
+
+export const DOCUMENT_TYPES = ['quotation', 'invoice', 'order'] as const;
+export type DocumentType = (typeof DOCUMENT_TYPES)[number];
+
+export const GET_DOCUMENT_TOOL: ActionToolDef = {
+  name: 'get_document',
+  description:
+    'Read one quotation / tax invoice / sales order in full — header, customer, the numbered lines exactly as printed (S.No, part, ' +
+    'each item\'s specs by name, one-time-charge flag, rate, GST %), the parts with their detail and subtotals, the extra fields and how each one prints, ' +
+    'totals, terms, notes and whether it is locked. Instant, no confirmation. ' +
+    'Use it BEFORE editing a document, whenever the user refers to a document by number, and to copy lines from one document to another. ' +
+    'Pass the uuid when you have it (query result / current page), otherwise the number or a fragment of it ("0003", "26-27/0012", "781").',
+  permission: '',
+  properties: {
+    type: { type: 'string', enum: [...DOCUMENT_TYPES], description: 'quotation | invoice (tax invoice / bill) | order (sales order)' },
+    id: { type: 'string', description: 'Record uuid, when known' },
+    number: { type: 'string', description: 'Document number or a fragment of it — used when the uuid is not known' },
+  },
+  required: ['type'],
+};
 
 // ── Navigation (instant, not staged) ────────────────────────────────────────
 

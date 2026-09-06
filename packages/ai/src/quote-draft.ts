@@ -15,6 +15,11 @@ export const quoteDraftSchema = z.object({
   items: z.array(z.object({
     description: z.string().describe('Line item description as it should appear on the quotation, e.g. "Blanking die"'),
     groupLabel: z.string().describe('The part / part-number this line belongs to, e.g. "30017AW1002". Use the SAME value for every die of the same part so they group under it, and keep a part\'s lines together. Empty string for a standalone line with no part.'),
+    groupNote: z.string().describe('Detail about the PART itself, printed beside its heading — drawing no., component name, material, sheet thickness, e.g. "Drawing DRG-114 · MS 2mm". Same text on every line of that part. Empty string if not stated.'),
+    specs: z.array(z.object({
+      name: z.string().describe('Spec name, reused identically across items — Material, Hardness, Size, Thickness, Finish, Tolerance…'),
+      value: z.string().describe('This item\'s value for that spec, e.g. "D2", "58-60 HRC", "200x150x25"'),
+    })).describe('Specs of THIS item (0–6). Record every spec the enquiry gives; leave empty when none are stated. Descriptive only — never affects price.'),
     hsn: z.string().describe('HSN/SAC code, empty string if unsure'),
     qty: z.number().describe('Quantity'),
     uom: z.string().describe('Unit of measure, e.g. NOS, SET, KG, HRS'),
@@ -42,6 +47,16 @@ const GEMINI_DRAFT_SCHEMA: Schema = {
         properties: {
           description: { type: Type.STRING },
           groupLabel: { type: Type.STRING, description: 'The part / part-number this line belongs to (e.g. "30017AW1002"). Same value for every die of the same part; keep a part\'s lines together. Empty string if the line has no part.' },
+          groupNote: { type: Type.STRING, description: 'Detail about the part itself (drawing no., component, material, thickness). Same on every line of that part; empty string if not stated.' },
+          specs: {
+            type: Type.ARRAY,
+            description: 'Specs of this item (0–6), e.g. Material D2, Hardness 58-60 HRC, Size 200x150x25. Empty when none stated.',
+            items: {
+              type: Type.OBJECT,
+              properties: { name: { type: Type.STRING }, value: { type: Type.STRING } },
+              required: ['name', 'value'],
+            },
+          },
           hsn: { type: Type.STRING, description: 'HSN/SAC code, empty string if unsure' },
           qty: { type: Type.NUMBER },
           uom: { type: Type.STRING, description: 'NOS, SET, KG, HRS…' },
@@ -50,7 +65,7 @@ const GEMINI_DRAFT_SCHEMA: Schema = {
           isToolingCharge: { type: Type.BOOLEAN },
           basis: { type: Type.STRING, description: 'How the rate was arrived at' },
         },
-        required: ['description', 'groupLabel', 'hsn', 'qty', 'uom', 'rate', 'gstRate', 'isToolingCharge', 'basis'],
+        required: ['description', 'groupLabel', 'groupNote', 'specs', 'hsn', 'qty', 'uom', 'rate', 'gstRate', 'isToolingCharge', 'basis'],
       },
     },
     termsSuggestion: { type: Type.ARRAY, items: { type: Type.STRING } },
@@ -72,6 +87,8 @@ You draft quotation line items from an enquiry. A human reviews and edits everyt
 
 Rules:
 - Break the work into clear, quotable line items (the part(s), and a separate one-time tooling/NRE line where applicable, marked isToolingCharge).
+- NEVER INVENT A SPEC: record only the material/hardness/size/tolerance the enquiry actually states, for the item it states it for. Leave a spec out rather than guessing or copying it from another line — put any judgement of your own in assumptions, never in a spec field.
+- PART DETAIL & ITEM SPECS: put detail about the part (drawing no., component name, material, sheet thickness) in that part's groupNote — the same text on every line of the part. Put the specs of an individual die/tool (Material, Hardness, Size, Thickness, Finish, Tolerance) in that line's specs. Record every spec the enquiry states; never invent one.
 - GROUPING BY PART (important): when the enquiry lists several parts, each with multiple dies/tools and a price per die — e.g. "part 30017AW1002: blanking die 30000, bending die 16000; part 41928: blanking & punching die 55000, bending die 20000" — make EACH die its own line with its own rate, set that line's groupLabel to the part number/name ("30017AW1002", "41928", …), and keep all the lines of one part together. The quotation then shows each part as a heading with its dies and a subtotal. If there is only one part or none, leave groupLabel empty.
 - Propose realistic INR unit rates (ex-GST). Anchor on the shop's recent quoted rates for similar work when history is provided; otherwise use sound estimating judgment for the Indian tooling market and say so in assumptions.
 - HSN/SAC: use what history shows for similar items; common codes here — 8207 (interchangeable tools/dies), 8480 (moulds), 7325/7326 (steel articles), SAC 9988 (job work / machining services). Empty string if genuinely unsure.
@@ -93,6 +110,10 @@ function clampDraft(draft: QuoteDraft): QuoteDraft {
     uom: (it.uom || 'NOS').toUpperCase().slice(0, 10),
     hsn: (it.hsn || '').slice(0, 10),
     groupLabel: (it.groupLabel || '').slice(0, 120),
+    groupNote: (it.groupNote || '').slice(0, 200),
+    specs: (it.specs ?? []).slice(0, 6)
+      .map((sp) => ({ name: (sp.name || '').trim().slice(0, 60), value: (sp.value || '').trim().slice(0, 200) }))
+      .filter((sp) => sp.name && sp.value),
   }));
   return draft;
 }

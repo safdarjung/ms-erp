@@ -10,10 +10,11 @@ export {
   ATTACH_MIME_TYPES, MAX_ATTACHMENTS, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS_TOTAL_BYTES, base64LenCap,
 } from './assistant-core';
 export type {
-  AssistantEvent, AssistantContext, ChatTurn, ChartSpec, QueryResult, StagedAction, StageResult,
-  EditField, EditItem, Attachment, AttachMime,
+  AssistantEvent, AssistantContext, ChatTurn, ChartSpec, QueryResult, StagedAction, StageResult, StagedDocMeta,
+  EditField, EditItem, Attachment, AttachMime, GetDocumentInput, GetDocumentResult,
 } from './assistant-core';
-export { ACTION_TOOLS, ACTION_TOOL_NAMES, PAGE_TARGETS } from './agent-tools';
+export { ACTION_TOOLS, ACTION_TOOL_NAMES, PAGE_TARGETS, DOCUMENT_TYPES } from './agent-tools';
+export type { DocumentType } from './agent-tools';
 export { draftQuotation, quoteDraftSchema } from './quote-draft';
 export type { QuoteDraft, QuoteHistoryItem } from './quote-draft';
 export { polishProse } from './prose';
