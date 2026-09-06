@@ -212,6 +212,8 @@ export const quotationItem = pgTable('quotation_item', {
   isToolingCharge: boolean('is_tooling_charge').notNull().default(false),
   // Part / section heading this row sits under (NULL = ungrouped).
   groupLabel: varchar('group_label', { length: 120 }),
+  // Detail printed beside that heading (drawing no., component, material…).
+  groupNote: varchar('group_note', { length: 200 }),
   // Custom-column values keyed by columnDef.id.
   attributes: jsonb('attributes').$type<Record<string, string>>().notNull().default(sql`'{}'::jsonb`),
 }, (t) => ({ qIdx: index('quotation_item_q_idx').on(t.quotationId) }));
@@ -248,6 +250,7 @@ export const orderItem = pgTable('order_item', {
   gstRate: numeric('gst_rate', { precision: 5, scale: 2 }).notNull().default('18'),
   taxableValue: numeric('taxable_value', { precision: 14, scale: 2 }).notNull().default('0'),
   groupLabel: varchar('group_label', { length: 120 }),
+  groupNote: varchar('group_note', { length: 200 }),
   attributes: jsonb('attributes').$type<Record<string, string>>().notNull().default(sql`'{}'::jsonb`),
 }, (t) => ({ oIdx: index('order_item_o_idx').on(t.orderId) }));
 
@@ -349,6 +352,7 @@ export const taxInvoiceItem = pgTable('tax_invoice_item', {
   gstRate: numeric('gst_rate', { precision: 5, scale: 2 }).notNull().default('18'),
   taxableValue: numeric('taxable_value', { precision: 14, scale: 2 }).notNull().default('0'),
   groupLabel: varchar('group_label', { length: 120 }),
+  groupNote: varchar('group_note', { length: 200 }),
   attributes: jsonb('attributes').$type<Record<string, string>>().notNull().default(sql`'{}'::jsonb`),
 }, (t) => ({ iIdx: index('tax_invoice_item_i_idx').on(t.invoiceId) }));
 
