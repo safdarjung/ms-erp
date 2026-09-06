@@ -149,3 +149,40 @@ The data model and interfaces are built so these drop in without rework:
 | Quotation / Proforma / Invoice editor | ③ Draft prose fields (scope, terms, notes) |
 | Purchase / GRN (phase 2) | OCR capture |
 | Notifications (phase 2) | Predictive & delay-risk alerts |
+
+---
+
+## 9. Agentic document generation & editing (built 2026-09-02)
+
+The assistant can build and edit quotations, tax invoices and sales orders end-to-end, with the human-in-the-loop card as the only write path.
+
+**Reading.** `get_document {type, id | number}` — instant, read-only. Returns the header, customer, the lines numbered exactly as printed (S.No, part, custom-column values by name, tooling flag), totals, terms/notes and lock state. Number lookup is `ILIKE` on a fragment (`"0003"`, `"26-27/0012"`); ambiguous matches are returned as candidates so the model asks instead of guessing.
+
+**Editing.** `update_quotation / update_invoice / update_order` take `edits` — line-level ops resolved server-side against the *current* lines (`apps/web/src/lib/doc-edits.ts`, pure, tested with `pnpm --filter @ms/web test`):
+
+| op | what it does |
+|---|---|
+| `update` | change any field of one line (rate, qty, description, GST %, part, column values) |
+| `add` / `remove` / `move` | insert (into a part or after a line), delete, reorder |
+| `adjust_rates` | `percent` or `amount` on `lines`, a part (`groupLabel`) or all; optional `roundTo` (e.g. ₹100) |
+| `set_gst` | set a GST rate on a scope |
+| `set_group` / `rename_group` | regroup lines under a part / rename a part |
+| `set_column` / `rename_column` / `remove_column` | custom descriptive columns |
+
+Line numbers in a batch always mean the document *before* the batch, so the model plans every edit from one `get_document` read. The staged payload is the fully resolved document (so the card can show and edit the whole thing), and the card carries a change list (“Line 3 “Blanking die”: rate ₹30,000 → ₹32,000”). A full `items` array is still accepted for rebuild-from-scratch; it's diffed against the current lines for the same change list. Limits: 60 lines, 12 custom columns.
+
+**Repeat jobs.** `duplicate_quotation {quotationId, customerId?, edits?}` copies lines/parts/columns/terms into a fresh numbered draft (optionally for another customer), with edits applied to the copy.
+
+**Card UX.** Every document proposal renders a grouped preview (parts, subtotals, column chips, totals computed with the same `computeGst`) and a **Review & edit** button that opens the full-width line-items editor the forms use (portal modal), with live totals. Edits go back through `buildStage` (zod + business checks) before execution. The panel can be widened, and the thread survives reloads (sessionStorage).
+
+---
+
+## 10. Complex documents — parts, items and specs (built 2026-09-03)
+
+Real job-shop quotes are not flat lists: one enquiry covers several **parts**, each part needs several **items** (blanking die, bending die, piercing die…), and each item carries its own specs.
+
+**The shape.** One line per item. `group_label` names the part (consecutive lines print under one heading with a subtotal); `group_note` (migration 0008) holds detail about the *part* — drawing no., component, material, sheet thickness — and is stored on every line of that part so it survives reordering. Per-item specs live in `attributes`, keyed by the document's `column_defs`.
+
+**Making many fields printable.** `ColumnDef.display` decides where a field appears: `'column'` (its own table column) or `'spec'` (under the item description as `Material: D2 · Hardness: 58–60 HRC`). Omitted means automatic: while ≤2 fields are undecided they stay columns — so existing documents look unchanged — and a third moves them all under the item, which keeps A4 readable with 6+ specs. One rule, in `packages/core/src/documents.ts` (`splitColumns` / `itemSpecs` / `formatSpecs` / `groupRuns`), used by the PDF, the detail table, the line editor and the AI's confirmation card, so all four always agree. Caps: 60 lines, 16 fields.
+
+**AI.** `create_*` items take `groupLabel`, `groupNote` and `attributes` ({name,value} pairs). Editing adds ops to the line-level `edits` set: `set_group_note` (part detail), `set_specs` (the same spec values across a part or a set of lines — "every die of part 41928 is D2, 58–60 HRC"), and `set_column_display`. A line joining a part inherits that part's detail; leaving it drops it. `get_document` returns the parts with their detail and subtotals, each item's specs by name, and how each field prints. In-form drafting (`quote-draft.ts` → `lib/quote-draft-rows.ts`) produces the same structure from a typed enquiry.
