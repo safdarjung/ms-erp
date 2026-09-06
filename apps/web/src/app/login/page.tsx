@@ -1,21 +1,38 @@
 'use client';
-import { useActionState, useState } from 'react';
+import { Suspense, useActionState, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { loginAction, type LoginState } from './actions';
 import { SubmitButton } from '@/components/submit-button';
 
 const FEATURES = [
-  ['Leads → Quotes → Orders → GST invoices', 'One spine, numbers always correct'],
-  ['Payments & receivables', 'Track outstanding, overdue and aging'],
-  ['AI assistant', 'Ask your data in English or हिन्दी'],
-  ['Tenant-isolated by the database', 'Postgres row-level security'],
+  ['Enquiries → Quotations → Orders → Bills', 'Every number and GST figure worked out for you'],
+  ['Payments & money to collect', 'See who owes what, and what is overdue'],
+  ['Ask AI', 'Ask about your business in English or हिन्दी — and let it do the work'],
+  ['Works on your phone', 'Install it like an app and use it on the shop floor'],
 ] as const;
 
 // Prefill demo creds only in local development — never ship a real login on the page.
 const isDev = process.env.NODE_ENV !== 'production';
 
 export default function LoginPage() {
+  return (
+    <Suspense fallback={<LoginScreen next="" />}>
+      <LoginWithNext />
+    </Suspense>
+  );
+}
+
+function LoginWithNext() {
+  const params = useSearchParams();
+  const raw = params.get('next') ?? '';
+  const next = raw.startsWith('/') && !raw.startsWith('//') ? raw : '';
+  return <LoginScreen next={next} />;
+}
+
+function LoginScreen({ next }: { next: string }) {
   const [state, action] = useActionState<LoginState, FormData>(loginAction, {});
   const [show, setShow] = useState(false);
+  const errorId = 'login-error';
 
   return (
     <div className="min-h-screen grid lg:grid-cols-2">
@@ -25,51 +42,62 @@ export default function LoginPage() {
           <span className="font-semibold text-lg tracking-tight">MS Enterprises</span>
         </div>
         <div>
-          <p className="font-mono text-[0.68rem] uppercase tracking-[0.14em] text-accent mb-3">Die & machining job-shop ERP</p>
-          <h1 className="text-3xl font-semibold tracking-tight leading-snug mb-8 max-w-md">
-            The shop floor, the front office, and your GST paperwork — in one place.
-          </h1>
+          <p className="text-xs text-accent font-medium mb-3">Dies, tooling & machining — Faridabad</p>
+          <p className="text-3xl font-semibold tracking-tight leading-snug mb-8 max-w-md">
+            Enquiries, quotations, orders, bills and payments — in one place, on your phone.
+          </p>
           <dl className="space-y-4 max-w-sm">
             {FEATURES.map(([t, d]) => (
               <div key={t} className="border-l-2 border-accent/60 pl-4">
                 <dt className="text-sm font-medium">{t}</dt>
-                <dd className="text-xs text-white/60">{d}</dd>
+                <dd className="text-xs text-white/70">{d}</dd>
               </div>
             ))}
           </dl>
         </div>
-        <p className="font-mono text-[0.65rem] text-white/40">Faridabad · Haryana · Phase 1</p>
+        <p className="text-xs text-white/60">Works on your phone — install it like an app.</p>
       </div>
 
       <div className="grid place-items-center p-6">
         <div className="w-full max-w-sm">
           <div className="flex items-center gap-2 mb-6 justify-center lg:hidden">
             <span className="text-accent text-2xl leading-none" aria-hidden>⚙</span>
-            <span className="font-semibold text-lg tracking-tight">MS Enterprises ERP</span>
+            <span className="font-semibold text-lg tracking-tight">MS Enterprises</span>
           </div>
-          <h2 className="text-xl font-semibold tracking-tight mb-4 hidden lg:block">Sign in</h2>
-          <form action={action} className="card p-6 flex flex-col gap-4">
+          <h1 className="text-xl font-semibold tracking-tight mb-1">Sign in</h1>
+          {next ? (
+            <p className="text-sm text-muted mb-4">Please sign in again to continue.</p>
+          ) : (
+            <p className="text-sm text-muted mb-4">Use the email and password the owner gave you.</p>
+          )}
+          <form action={action} className="card p-6 flex flex-col gap-4" aria-describedby={state.error ? errorId : undefined}>
+            {next && <input type="hidden" name="next" value={next} />}
             <div>
               <label className="label" htmlFor="email">Email</label>
-              <input id="email" name="email" type="email" autoComplete="username" required
-                className="field" defaultValue={isDev ? 'owner@msenterprises.test' : ''} placeholder="you@company.com" />
+              <input id="email" name="email" type="email" autoComplete="username" inputMode="email" required
+                className="field" defaultValue={isDev ? 'owner@msenterprises.test' : ''} placeholder="you@company.com"
+                aria-invalid={state.error ? true : undefined} aria-describedby={state.error ? errorId : undefined} />
             </div>
             <div>
               <label className="label" htmlFor="password">Password</label>
               <div className="relative">
                 <input id="password" name="password" type={show ? 'text' : 'password'} autoComplete="current-password" required
-                  className="field pr-16" defaultValue={isDev ? 'password123' : ''} />
+                  className="field pr-20" defaultValue={isDev ? 'password123' : ''}
+                  aria-invalid={state.error ? true : undefined} aria-describedby={state.error ? errorId : undefined} />
                 <button type="button" onClick={() => setShow((s) => !s)}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-muted hover:text-ink px-1"
-                  aria-label={show ? 'Hide password' : 'Show password'}>
+                  className="absolute right-1 top-1/2 -translate-y-1/2 text-xs text-muted hover:text-ink min-h-[44px] px-3"
+                  aria-pressed={show}>
                   {show ? 'Hide' : 'Show'}
                 </button>
               </div>
             </div>
-            {state.error && <p className="text-sm text-crit">{state.error}</p>}
-            <SubmitButton className="btn-primary w-full">Sign in</SubmitButton>
+            {state.error && <p id={errorId} role="alert" className="text-sm text-crit">{state.error}</p>}
+            <SubmitButton className="btn-primary w-full" pendingLabel="Signing in…">Sign in</SubmitButton>
+            <p className="text-xs text-muted text-center">
+              Forgot your password? Ask the owner — they can set a new one under Settings → Staff.
+            </p>
             {isDev && (
-              <p className="text-xs text-faint text-center">
+              <p className="text-xs text-muted text-center">
                 Demo: owner@msenterprises.test · password123
               </p>
             )}

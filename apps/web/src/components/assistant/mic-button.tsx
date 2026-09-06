@@ -6,8 +6,13 @@ import { startRecording, isRecordingSupported, type AudioRecorder } from '@/lib/
 // light Gemini model (good at Hindi/Hinglish) via /api/assistant/transcribe.
 // Unlike the browser SpeechRecognition API this works inside an installed Android
 // web-app, because it only needs mic capture — not the recognition service.
+// Tap to start, tap again to stop (no press-and-hold — that fails on phones).
 
 const MAX_SECONDS = 60;
+/** Fewer samples than this is a stray tap, not speech. */
+const MIN_SAMPLES = 1600;
+/** Icon-only controls keep a 44px hit area on phones even though the glyph is small. */
+const HIT = 'min-h-11 min-w-11 inline-flex items-center justify-center';
 
 function mmss(s: number): string {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
@@ -65,7 +70,7 @@ export function MicButton({
     setMode('transcribing');
     try {
       const { base64, mimeType, samples } = await rec.stop();
-      if (samples < 1600) { setErr('Too short — hold the button and speak.'); setMode('idle'); return; }
+      if (samples < MIN_SAMPLES) { setErr('Too short — tap the mic, speak, then tap it again.'); setMode('idle'); return; }
       const res = await fetch('/api/assistant/transcribe', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -73,14 +78,14 @@ export function MicButton({
       });
       const j = (await res.json().catch(() => ({}))) as { text?: string; error?: string };
       if (!res.ok) {
-        setErr(j.error ?? 'Voice typing failed — try again.');
+        setErr(j.error ?? 'Voice typing didn’t work — please try again.');
       } else {
         const text = (j.text ?? '').trim();
         if (text) { setErr(null); onText(text); }
-        else setErr('Didn’t catch that — try again.');
+        else setErr('Didn’t catch that — try again, a little closer to the mic.');
       }
     } catch {
-      setErr('Voice typing failed — check your connection.');
+      setErr('Couldn’t reach the server — check your connection and try again.');
     } finally {
       setMode('idle');
     }
@@ -100,10 +105,10 @@ export function MicButton({
       const name = (e as { name?: string })?.name;
       setErr(
         name === 'NotAllowedError' || name === 'SecurityError'
-          ? 'Mic blocked — allow microphone for this site (tap the lock/ⓘ in the address bar), then retry.'
+          ? 'Mic is blocked. Tap 🔒 in the address bar → Microphone → Allow.'
           : name === 'NotFoundError'
             ? 'No microphone found on this device.'
-            : 'Couldn’t start the mic — try again.',
+            : 'Couldn’t start the mic — please try again.',
       );
     }
   };
@@ -118,9 +123,9 @@ export function MicButton({
       <button
         type="button"
         disabled
-        title="Voice input needs microphone access (unavailable in this browser)."
-        aria-label="Voice input not available in this browser"
-        className="btn-ghost shrink-0 !px-2.5 opacity-40 cursor-not-allowed"
+        title="Voice typing isn’t available in this browser."
+        aria-label="Voice typing isn’t available in this browser"
+        className={`btn-ghost shrink-0 !px-2.5 opacity-40 cursor-not-allowed ${HIT}`}
       >
         <MicIcon />
       </button>
@@ -128,29 +133,37 @@ export function MicButton({
   }
 
   const busy = mode === 'transcribing';
+  const langLabel = lang === 'en-IN' ? 'EN' : 'हिं';
+  const langName = lang === 'en-IN' ? 'English' : 'Hindi';
   return (
     <div className="flex items-center gap-1 shrink-0">
-      {mode === 'recording' && <span className="text-[0.62rem] tabular-nums text-crit font-medium">{mmss(elapsed)}</span>}
+      {mode === 'recording' && (
+        <span className="text-xs text-crit font-medium whitespace-nowrap" role="status" aria-live="polite">
+          <span className="animate-pulse" aria-hidden>●</span> Listening… tap to stop <span className="tabular-nums">{mmss(elapsed)}</span>
+        </span>
+      )}
+      {busy && <span className="text-xs text-muted whitespace-nowrap" role="status" aria-live="polite">Writing it down…</span>}
       {err && mode === 'idle' && (
-        <span className="text-[0.62rem] text-crit max-w-[11rem] leading-tight" role="status">{err}</span>
+        <span className="text-xs text-crit max-w-[12rem] leading-tight" role="alert">{err}</span>
       )}
       <button
         type="button"
         onClick={() => setLang((l) => (l === 'en-IN' ? 'hi-IN' : 'en-IN'))}
         disabled={mode !== 'idle'}
-        className="text-[0.62rem] font-medium text-muted hover:text-ink border border-line-strong rounded px-1.5 leading-none self-stretch disabled:opacity-40"
-        title="Voice language (tap to switch)"
-        aria-label={`Voice language: ${lang === 'en-IN' ? 'English' : 'Hindi'}`}
+        className={`${HIT} rounded-full border border-line-strong px-2.5 text-xs font-medium text-muted hover:text-ink hover:border-accent/50 disabled:opacity-40 whitespace-nowrap`}
+        title={`Speaking ${langName} — tap to switch`}
+        aria-label={`Voice language: ${langName}. Tap to switch.`}
       >
-        {lang === 'en-IN' ? 'EN' : 'हिं'}
+        <span aria-hidden>🎤</span> {langLabel}
       </button>
       <button
         type="button"
         onClick={onMic}
         disabled={disabled || busy}
-        title={busy ? 'Transcribing…' : mode === 'recording' ? 'Stop & insert text' : 'Speak (voice typing)'}
-        aria-label={busy ? 'Transcribing' : mode === 'recording' ? 'Stop and transcribe' : 'Start voice typing'}
-        className={`btn-ghost shrink-0 !px-2.5 ${mode === 'recording' ? '!text-crit !border-crit/50 animate-pulse' : err ? '!text-crit' : ''}`}
+        title={busy ? 'Writing it down…' : mode === 'recording' ? 'Tap to stop' : 'Speak (हिन्दी / English)'}
+        aria-label={busy ? 'Writing it down' : mode === 'recording' ? 'Stop listening' : 'Speak instead of typing'}
+        aria-pressed={mode === 'recording'}
+        className={`btn-ghost shrink-0 !px-2.5 ${HIT} ${mode === 'recording' ? '!text-crit !border-crit/50 animate-pulse' : err ? '!text-crit' : ''}`}
       >
         {busy ? <Spinner /> : <MicIcon />}
       </button>

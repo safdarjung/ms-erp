@@ -12,10 +12,16 @@ export default async function EditOrderPage({ params }: { params: Promise<{ id: 
   const user = await requireUser();
   if (!can(user, 'order.edit')) redirect('/orders');
   const { id } = await params;
-  const [data, customers, lh] = await Promise.all([getOrder(id), customersForSelect(), getLetterhead()]);
+  const [data, activeCustomers, lh] = await Promise.all([getOrder(id), customersForSelect(), getLetterhead()]);
   if (!data?.order) notFound();
-  const { order: o, items } = data;
-  if (o.convertedInvoiceId || o.status === 'cancelled') redirect(`/orders/${id}`); // locked once invoiced/cancelled
+  const { order: o, items, customer: docCustomer } = data;
+  // An archived customer is hidden from pickers, but this document still belongs
+  // to them — keep them in the list so the name and GST preview stay right.
+  const customers = docCustomer && !activeCustomers.some((c) => c.id === docCustomer.id)
+    ? [{ id: docCustomer.id, name: docCustomer.name, stateCode: docCustomer.stateCode, gstin: docCustomer.gstin }, ...activeCustomers]
+    : activeCustomers;
+  if (o.convertedInvoiceId) redirect(`/orders/${id}?locked=bill`);
+  if (o.status === 'cancelled') redirect(`/orders/${id}?locked=cancelled`);
 
   const initial = {
     customerId: o.customerId,
@@ -30,10 +36,10 @@ export default async function EditOrderPage({ params }: { params: Promise<{ id: 
 
   return (
     <div className="max-w-4xl">
-      <p className="eyebrow">Order book</p>
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-semibold tracking-tight">Edit {o.number}</h1>
-        <Link href={`/orders/${id}`} className="text-steel text-sm hover:underline">← Back</Link>
+      <p className="text-xs text-muted">Quotations, orders &amp; bills</p>
+      <div className="flex items-center justify-between mb-6 gap-3 flex-wrap">
+        <h1 className="text-2xl font-semibold tracking-tight">Edit <span className="font-mono">{o.number}</span></h1>
+        <Link href={`/orders/${id}`} className="text-steel text-sm hover:underline">← Back to {o.number}</Link>
       </div>
       <OrderForm
         mode="edit"

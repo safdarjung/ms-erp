@@ -46,6 +46,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       amount: Number(i.taxableValue),
       isTooling: i.isToolingCharge,
       groupLabel: i.groupLabel ?? undefined,
+      groupNote: i.groupNote ?? undefined,
       attributes: i.attributes ?? undefined,
     })),
     totals: {

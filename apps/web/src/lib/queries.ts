@@ -4,9 +4,9 @@ import {
   withTenant, customer, lead, leadActivity, quotation, quotationItem, salesOrder, orderItem,
   taxInvoice, taxInvoiceItem, payment, tenant,
   users, role, userRole, inboundMessage, leadChannel,
-  count, sql, desc, asc, eq, or, ilike, and,
+  count, sql, desc, asc, eq, ne, or, ilike, and,
 } from '@ms/db';
-import { parseLetterhead, paymentStatus, type Letterhead } from '@ms/core';
+import { parseLetterhead, paymentStatus, type Letterhead, type PaymentState } from '@ms/core';
 import { requireUser } from './rbac';
 import { DEFAULT_WHATSAPP_NUMBER, DEFAULT_INTRO, type OutreachSettings } from './outreach';
 
@@ -43,14 +43,20 @@ function orderFor(sort: string | undefined, cols: Record<string, Column>, fallba
   return [dir === 'asc' ? asc(col) : desc(col), ...fallback];
 }
 
-export async function listCustomers(opts: { q?: string; page?: number; sort?: string } = {}) {
+/** Hidden (archived) customers stay out of lists and pickers unless asked for. */
+const ARCHIVED = 'archived';
+
+export async function listCustomers(opts: { q?: string; page?: number; sort?: string; archived?: boolean } = {}) {
   const u = await requireUser();
   const { page, limit, offset } = pageWindow(opts.page);
-  const where = opts.q?.trim()
-    ? or(ilike(customer.name, like(opts.q)), ilike(customer.gstin, like(opts.q)),
-        ilike(customer.phone, like(opts.q)), ilike(customer.contactPerson, like(opts.q)),
-        ilike(customer.email, like(opts.q)), ilike(customer.address, like(opts.q)))
-    : undefined;
+  const filters: SQL[] = [];
+  if (opts.q?.trim()) {
+    filters.push(or(ilike(customer.name, like(opts.q)), ilike(customer.gstin, like(opts.q)),
+      ilike(customer.phone, like(opts.q)), ilike(customer.contactPerson, like(opts.q)),
+      ilike(customer.email, like(opts.q)), ilike(customer.address, like(opts.q)))!);
+  }
+  filters.push(opts.archived ? eq(customer.status, ARCHIVED) : ne(customer.status, ARCHIVED));
+  const where = and(...filters);
   const order = orderFor(opts.sort,
     { name: customer.name, credit: customer.creditTermsDays, created: customer.createdAt },
     [desc(customer.createdAt)]);
@@ -63,7 +69,16 @@ export async function listCustomers(opts: { q?: string; page?: number; sort?: st
   });
 }
 
-export async function listLeads(opts: { q?: string; stage?: string; page?: number; sort?: string } = {}) {
+/** Start of tomorrow in India time, as ISO — "due today" means anything before this. */
+function istTomorrowStartIso(now: Date = new Date()): string {
+  const ist = new Date(now.getTime() + 5.5 * 3_600_000);
+  const next = Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth(), ist.getUTCDate() + 1) - 5.5 * 3_600_000;
+  return new Date(next).toISOString();
+}
+
+const OPEN_LEAD = sql`${lead.stage} not in ('won','lost')`;
+
+export async function listLeads(opts: { q?: string; stage?: string; due?: string; page?: number; sort?: string } = {}) {
   const u = await requireUser();
   const { page, limit, offset } = pageWindow(opts.page);
   const filters: SQL[] = [];
@@ -74,10 +89,15 @@ export async function listLeads(opts: { q?: string; stage?: string; page?: numbe
     )!);
   }
   if (opts.stage?.trim()) filters.push(eq(lead.stage, opts.stage));
+  // "Due today" = open enquiries whose follow-up is today or already overdue.
+  if (opts.due === 'today') {
+    filters.push(sql`${lead.nextFollowupAt} is not null and ${lead.nextFollowupAt} < ${istTomorrowStartIso()}`, OPEN_LEAD);
+  }
   const where = filters.length ? and(...filters) : undefined;
+  // Default order: open enquiries first, soonest follow-up on top, then newest.
   const order = orderFor(opts.sort,
-    { customer: lead.customerName, value: lead.valueEstimate, stage: lead.stage, created: lead.createdAt },
-    [desc(lead.createdAt)]);
+    { customer: lead.customerName, value: lead.valueEstimate, stage: lead.stage, created: lead.createdAt, followup: lead.nextFollowupAt },
+    [sql`(${lead.stage} in ('won','lost'))`, sql`${lead.nextFollowupAt} asc nulls last`, desc(lead.createdAt)]);
   return withTenant(u.tenantId, u.userId, async (tx) => {
     const [rows, [c]] = await Promise.all([
       tx.select().from(lead).where(where).orderBy(...order).limit(limit).offset(offset),
@@ -197,39 +217,69 @@ export async function customersForSelect() {
   const u = await requireUser();
   return withTenant(u.tenantId, u.userId, (tx) =>
     tx.select({ id: customer.id, name: customer.name, stateCode: customer.stateCode, gstin: customer.gstin })
-      .from(customer).orderBy(customer.name),
+      .from(customer).where(ne(customer.status, ARCHIVED)).orderBy(customer.name),
   );
 }
 
+// Money received against a bill, as a scalar subquery so it can be used in
+// WHERE (payment state is derived: bills carry no stored "unpaid/overdue").
+const RECEIVED = sql<string>`coalesce((select sum(${payment.amount}) from ${payment} where ${payment.invoiceId} = ${taxInvoice.id}), 0)`;
+// Same rule as paymentStatus() in @ms/core: a few paise never keeps a bill "unpaid".
+const EPSILON = 0.5;
+
+/** SQL predicate for a derived payment state (mirrors paymentStatus()). */
+function paymentStateWhere(state: string): SQL | undefined {
+  const live = sql`${taxInvoice.status} <> 'cancelled'`;
+  const due = sql`(${taxInvoice.grandTotal} - ${RECEIVED}) > ${EPSILON}`;
+  const nothingReceived = sql`${RECEIVED} <= ${EPSILON}`;
+  const pastDue = sql`${taxInvoice.dueDate} is not null and ${taxInvoice.dueDate} < now()`;
+  switch (state as PaymentState) {
+    case 'cancelled': return sql`${taxInvoice.status} = 'cancelled'`;
+    case 'paid': return sql`${live} and not (${due})`;
+    case 'partial': return sql`${live} and ${due} and not (${nothingReceived})`;
+    case 'overdue': return sql`${live} and ${due} and ${nothingReceived} and ${pastDue}`;
+    case 'unpaid': return sql`${live} and ${due} and ${nothingReceived} and not (${pastDue})`;
+    default: return undefined;
+  }
+}
+
+/**
+ * Bills list. `status` is the DERIVED payment state (unpaid / partial / paid /
+ * overdue / cancelled). Also returns the money still due across the whole
+ * filter (not just this page).
+ */
 export async function listInvoices(opts: { q?: string; status?: string; page?: number; sort?: string } = {}) {
   const u = await requireUser();
   const { page, limit, offset } = pageWindow(opts.page);
   const filters: SQL[] = [];
   if (opts.q?.trim()) filters.push(or(ilike(taxInvoice.number, like(opts.q)), ilike(customer.name, like(opts.q)))!);
-  if (opts.status?.trim()) filters.push(eq(taxInvoice.status, opts.status));
+  const stateWhere = opts.status?.trim() ? paymentStateWhere(opts.status.trim()) : undefined;
+  if (stateWhere) filters.push(stateWhere);
   const where = filters.length ? and(...filters) : undefined;
   const order = orderFor(opts.sort,
     { number: taxInvoice.number, date: taxInvoice.docDate, due: taxInvoice.dueDate,
       total: taxInvoice.grandTotal, customer: customer.name },
     [desc(taxInvoice.createdAt)]);
+  const outstandingExpr = sql<string>`coalesce(sum(case
+    when ${taxInvoice.status} = 'cancelled' then 0
+    when (${taxInvoice.grandTotal} - ${RECEIVED}) > ${EPSILON} then (${taxInvoice.grandTotal} - ${RECEIVED})
+    else 0 end), 0)`;
   return withTenant(u.tenantId, u.userId, async (tx) => {
     const [rows, [c]] = await Promise.all([
       tx.select({
         id: taxInvoice.id, number: taxInvoice.number, docDate: taxInvoice.docDate, dueDate: taxInvoice.dueDate,
         status: taxInvoice.status, grandTotal: taxInvoice.grandTotal, isInterstate: taxInvoice.isInterstate,
         customerName: customer.name,
-        received: sql<string>`coalesce(sum(${payment.amount}), 0)`,
+        received: RECEIVED,
       }).from(taxInvoice)
         .leftJoin(customer, eq(taxInvoice.customerId, customer.id))
-        .leftJoin(payment, eq(payment.invoiceId, taxInvoice.id))
         .where(where)
-        .groupBy(taxInvoice.id, customer.name)
         .orderBy(...order).limit(limit).offset(offset),
-      tx.select({ n: count() }).from(taxInvoice)
+      tx.select({ n: count(), outstanding: outstandingExpr }).from(taxInvoice)
         .leftJoin(customer, eq(taxInvoice.customerId, customer.id))
         .where(where),
     ]);
-    return paged(rows, Number(c?.n ?? 0), page);
+    return { ...paged(rows, Number(c?.n ?? 0), page), outstandingTotal: Number(c?.outstanding ?? 0) };
   });
 }
 
@@ -490,8 +540,12 @@ export async function dashboardData() {
       .from(quotation).where(sql`${quotation.status} in ('draft','sent')`);
     const [ordersOpen] = await tx.select({ n: count(), value: sql<string>`coalesce(sum(${salesOrder.totalValue}), 0)` })
       .from(salesOrder).where(sql`${salesOrder.status} in ('open','in_progress')`);
+    // Quotations sent and waiting for the customer's answer — the ones to chase.
+    const [quotesAwaiting] = await tx.select({ n: count(), value: sql<string>`coalesce(sum(${quotation.grandTotal}), 0)` })
+      .from(quotation).where(eq(quotation.status, 'sent'));
+    // Follow-ups due today or earlier (India time) — matches /leads?due=today.
     const [followups] = await tx.select({ n: count() }).from(lead)
-      .where(sql`${lead.nextFollowupAt} is not null and ${lead.nextFollowupAt} <= now() and ${lead.stage} not in ('won','lost')`);
+      .where(sql`${lead.nextFollowupAt} is not null and ${lead.nextFollowupAt} < ${istTomorrowStartIso(now)} and ${lead.stage} not in ('won','lost')`);
     const arRows = await tx.select({
       grandTotal: taxInvoice.grandTotal, dueDate: taxInvoice.dueDate, status: taxInvoice.status,
       received: sql<string>`coalesce(sum(${payment.amount}), 0)`,
@@ -507,7 +561,7 @@ export async function dashboardData() {
     // Action center: the specific overdue invoices and due follow-ups to act on
     // (with the customer's phone so the dashboard can offer one-tap WhatsApp).
     const overdueRows = await tx.select({
-      id: taxInvoice.id, number: taxInvoice.number, dueDate: taxInvoice.dueDate,
+      id: taxInvoice.id, number: taxInvoice.number, dueDate: taxInvoice.dueDate, customerId: taxInvoice.customerId,
       grandTotal: taxInvoice.grandTotal, customerName: customer.name, phone: customer.phone,
       received: sql<string>`coalesce(sum(${payment.amount}), 0)`,
     }).from(taxInvoice)
@@ -515,14 +569,15 @@ export async function dashboardData() {
       .leftJoin(payment, eq(payment.invoiceId, taxInvoice.id))
       .where(sql`${taxInvoice.status} <> 'cancelled' and ${taxInvoice.dueDate} is not null and ${taxInvoice.dueDate} < now()`)
       .groupBy(taxInvoice.id, customer.name, customer.phone);
-    const overdueInvoices = overdueRows
+    const overdueAll = overdueRows
       .map((r) => ({
-        id: r.id, number: r.number, dueDate: r.dueDate, customerName: r.customerName, phone: r.phone,
+        id: r.id, number: r.number, dueDate: r.dueDate, customerId: r.customerId, customerName: r.customerName, phone: r.phone,
         outstanding: Math.round((Number(r.grandTotal) - Number(r.received)) * 100) / 100,
       }))
       .filter((r) => r.outstanding > 0.5)
-      .sort((a, b) => b.outstanding - a.outstanding)
-      .slice(0, 6);
+      .sort((a, b) => b.outstanding - a.outstanding);
+    const overdueCustomers = new Set(overdueAll.map((r) => r.customerId ?? r.customerName ?? r.id)).size;
+    const overdueInvoices = overdueAll.slice(0, 6);
 
     const followupLeads = await tx.select({
       id: lead.id, customerName: lead.customerName, contact: lead.contact, phone: lead.phone,
@@ -552,9 +607,11 @@ export async function dashboardData() {
       pipeline: pipeline.map((p) => ({ stage: p.stage, n: Number(p.n), value: Number(p.value) })),
       quotesOpen: { n: Number(quotesOpen?.n ?? 0), value: Number(quotesOpen?.value ?? 0) },
       ordersOpen: { n: Number(ordersOpen?.n ?? 0), value: Number(ordersOpen?.value ?? 0) },
+      quotesAwaiting: { n: Number(quotesAwaiting?.n ?? 0), value: Number(quotesAwaiting?.value ?? 0) },
       followupsDue: Number(followups?.n ?? 0),
       receivables,
       overdue,
+      overdueCustomers,
       overdueInvoices,
       followupLeads,
       recentQuotations,

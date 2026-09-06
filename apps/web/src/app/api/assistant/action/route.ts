@@ -18,13 +18,13 @@ const bodySchema = z.object({
  */
 export async function POST(req: Request): Promise<Response> {
   const user = await getCurrentUser();
-  if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
+  if (!user) return Response.json({ error: 'Your session has ended — please log in again.' }, { status: 401 });
 
   let body: z.infer<typeof bodySchema>;
   try {
     body = bodySchema.parse(await req.json());
   } catch {
-    return Response.json({ error: 'Invalid request' }, { status: 400 });
+    return Response.json({ error: 'Couldn’t send that — please try again.' }, { status: 400 });
   }
 
   if (body.decision === 'cancel') {

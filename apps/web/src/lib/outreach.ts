@@ -1,5 +1,5 @@
 // WhatsApp "one-tap" outreach: build a wa.me deep link that opens WhatsApp with
-// the intro message pre-filled, addressed to the lead — sent from the owner's own
+// the intro message pre-filled, addressed to the customer (or the person who enquired) — sent from the owner's own
 // number. No WhatsApp Business API, no template approval, no cost.
 
 export const DEFAULT_WHATSAPP_NUMBER = '9811678546';

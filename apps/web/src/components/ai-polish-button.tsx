@@ -3,8 +3,9 @@ import { useState, useTransition } from 'react';
 import { polishProseAction } from '@/app/(app)/quotations/ai-actions';
 
 /**
- * "✦ Polish" for prose fields (terms/notes). Sends the current text to the AI
- * gateway and offers the result for one-click apply — never auto-applies.
+ * "✦ Improve wording with AI" for prose fields (terms/notes). Sends the current
+ * text to the AI gateway and offers the result for one-tap use — never
+ * auto-applies.
  */
 export function AiPolishButton({
   kind,
@@ -35,30 +36,33 @@ export function AiPolishButton({
       else setError(res.error);
     });
 
+  const idle = value.trim() ? `Improve wording with AI` : `Write ${kind} with AI`;
+
   return (
     <div className="mt-1.5">
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center gap-3">
         <button
           type="button"
           onClick={run}
           disabled={pending}
-          className="text-xs text-accent hover:underline disabled:opacity-50 inline-flex items-center gap-1"
+          aria-busy={pending}
+          className="text-xs text-accent hover:underline disabled:opacity-50 inline-flex items-center gap-1 min-h-11 sm:min-h-0"
         >
           <span aria-hidden>✦</span>
-          {pending ? 'Polishing…' : value.trim() ? `Polish ${kind} with AI` : `Draft ${kind} with AI`}
+          {pending ? 'Working…' : idle}
         </button>
-        {error && <span className="text-xs text-crit">{error}</span>}
+        {error && <span role="alert" className="text-xs text-crit">{error}</span>}
       </div>
       {suggestion !== null && (
-        <div className="mt-2 border border-accent/40 bg-accent-soft/30 rounded-lg p-3">
-          <div className="text-[0.65rem] font-mono uppercase tracking-wider text-accent mb-1.5">AI suggestion — review before applying</div>
+        <div className="mt-2 border border-accent/40 bg-accent-soft/30 rounded-lg p-3" role="region" aria-label="AI suggestion">
+          <div className="text-xs text-accent font-medium mb-1.5">AI suggestion — read it before using</div>
           <div className="text-xs whitespace-pre-wrap text-ink max-h-40 overflow-y-auto scroll-thin">{suggestion}</div>
-          <div className="flex gap-3 mt-2">
-            <button type="button" className="text-xs font-medium text-accent hover:underline" onClick={() => { onApply(suggestion); setSuggestion(null); }}>
-              Apply
+          <div className="flex gap-2 mt-2">
+            <button type="button" className="btn-primary text-xs !py-1" onClick={() => { onApply(suggestion); setSuggestion(null); }}>
+              Use this
             </button>
-            <button type="button" className="text-xs text-muted hover:underline" onClick={() => setSuggestion(null)}>
-              Dismiss
+            <button type="button" className="btn-ghost text-xs !py-1" onClick={() => setSuggestion(null)}>
+              Keep mine
             </button>
           </div>
         </div>

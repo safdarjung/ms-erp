@@ -4,20 +4,24 @@ import { requireUser, can } from '@/lib/rbac';
 import { listInboundMessages, inboxPendingCount, getOutreachSettings } from '@/lib/queries';
 import { buildWhatsappLink } from '@/lib/outreach';
 import { formatDate } from '@/lib/format';
+import { NAV, NAV_GROUPS } from '@/lib/nav-labels';
 import { FilterBar } from '@/components/filter-bar';
 import { Pagination } from '@/components/pagination';
+import { EmptyState } from '@/components/list-cards';
 import { InboxRow, type InboxMessage } from './inbox-row';
 import { signedUrl } from '@/lib/ingest/storage';
 import type { ExtractedLead, StoredAttachment } from '@/lib/ingest/types';
 
-export const metadata = { title: 'Lead inbox' };
+export const metadata = { title: 'Email enquiries' };
 
+// Plain-words names for inbound_message.status values.
 const STATUS_CHIPS = [
   { value: 'pending', label: 'Needs review' },
-  { value: 'converted', label: 'Lead created' },
-  { value: 'duplicate', label: 'Duplicate' },
-  { value: 'spam', label: 'Filtered' },
+  { value: 'converted', label: 'Enquiry created ✓' },
+  { value: 'duplicate', label: 'Already an enquiry' },
+  { value: 'spam', label: 'Looks like spam' },
   { value: 'ignored', label: 'Dismissed' },
+  { value: 'failed', label: "Couldn't read" },
 ];
 
 export default async function LeadInboxPage({
@@ -27,7 +31,7 @@ export default async function LeadInboxPage({
 }) {
   const { status, q, page } = await searchParams;
   const user = await requireUser();
-  if (!can(user, 'lead_inbox.view')) redirect('/dashboard');
+  if (!can(user, 'lead_inbox.view')) redirect(NAV.dashboard.href);
 
   const [list, pending, outreach] = await Promise.all([
     listInboundMessages({ status, q, page: Number(page) }), inboxPendingCount(), getOutreachSettings(),
@@ -75,25 +79,28 @@ export default async function LeadInboxPage({
     };
   }));
 
+  const setupLink = canManageChannels
+    ? <Link href={NAV.channels.href} className="text-steel hover:underline">{NAV.channels.label}</Link>
+    : null;
+
   return (
     <div className="max-w-4xl">
-      <p className="eyebrow">CRM</p>
-      <div className="flex items-center justify-between gap-3 mb-1 flex-wrap">
-        <h1 className="text-2xl font-semibold tracking-tight">Lead inbox</h1>
+      <p className="text-xs text-muted">{NAV_GROUPS.crm}</p>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-1">
+        <h1 className="text-2xl font-semibold tracking-tight">Email enquiries</h1>
         {canManageChannels && (
-          <Link href="/settings/channels" className="text-sm text-steel hover:underline">Lead sources →</Link>
+          <Link href={NAV.channels.href} className="btn-ghost text-xs w-full sm:w-auto">{NAV.channels.label} →</Link>
         )}
       </div>
       <p className="text-sm text-muted mb-5">
-        Enquiries forwarded from your email land here. IndiaMART / TradeIndia notifications become leads
-        automatically; anything else waits for a quick review.
+        Emails you forward here (IndiaMART, TradeIndia, your sales inbox) turn into enquiries. Ones we could not read fully wait for a quick look.
         {pending > 0 && <b className="text-ink"> {pending} need review.</b>}
       </p>
 
       <FilterBar
         basePath="/leads/inbox"
         q={q}
-        placeholder="Search subject, sender…"
+        placeholder="Search subject or sender…"
         chipParam="status"
         chipValue={status}
         chips={STATUS_CHIPS}
@@ -102,11 +109,14 @@ export default async function LeadInboxPage({
       <div className="flex flex-col gap-3">
         {messages.map((m) => <InboxRow key={m.id} message={m} canManage={canManage} />)}
         {messages.length === 0 && (
-          <div className="card px-4 py-10 text-center text-muted">
-            {status
-              ? 'Nothing with this status.'
-              : 'No inbound enquiries yet. Set up a Lead source to start capturing email leads.'}
-          </div>
+          <EmptyState
+            message={status || q
+              ? <>Nothing here. <Link href="/leads/inbox" className="text-steel hover:underline">Show all →</Link></>
+              : 'No email enquiries yet.'}
+            hint={!status && !q && (
+              <>Forward your IndiaMART / TradeIndia emails — {setupLink ? <>see {setupLink}.</> : 'ask the owner to set it up.'}</>
+            )}
+          />
         )}
       </div>
       <Pagination basePath="/leads/inbox" params={{ status, q }} page={current} pageSize={pageSize} total={total} />

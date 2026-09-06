@@ -6,7 +6,7 @@ import {
 import { withTenant, tenant } from '@ms/db';
 import { getCurrentUser } from '@/lib/auth';
 import { checkAiRateLimit, executeAnalyticsQuery, recordAiUsage } from '@/lib/ai';
-import { stageAction } from '@/lib/agent';
+import { getDocumentSnapshot, stageAction } from '@/lib/agent';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -50,8 +50,8 @@ const DETAIL_PAGES: { re: RegExp; entity: string }[] = [
   { re: new RegExp(`^/leads/(${UUID})`), entity: 'lead' },
 ];
 const LIST_PAGES: Record<string, string> = {
-  '/invoices': 'the Invoices list', '/quotations': 'the Quotations list', '/orders': 'the Order book',
-  '/customers': 'the Customers list', '/leads': 'the Leads list', '/leads/inbox': 'the Lead inbox',
+  '/invoices': 'the Bills (invoices) list', '/quotations': 'the Quotations list', '/orders': 'the Orders list',
+  '/customers': 'the Customers list', '/leads': 'the Enquiries (leads) list', '/leads/inbox': 'the Email enquiries list',
   '/dashboard': 'the Dashboard', '/analytics': 'the Analytics page',
 };
 
@@ -68,9 +68,9 @@ function describePage(path?: string): string | undefined {
 
 export async function POST(req: Request): Promise<Response> {
   const user = await getCurrentUser();
-  if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
+  if (!user) return Response.json({ error: 'Your session has ended — please log in again.' }, { status: 401 });
   if (!user.permissions.has('dashboard.view')) {
-    return Response.json({ error: 'Forbidden' }, { status: 403 });
+    return Response.json({ error: 'Your login doesn’t include the AI assistant — ask the owner.' }, { status: 403 });
   }
   if (!aiEnabled()) return Response.json({ disabled: true });
 
@@ -81,10 +81,10 @@ export async function POST(req: Request): Promise<Response> {
     history = body.messages;
     pageContext = describePage(body.context?.path);
   } catch {
-    return Response.json({ error: 'Invalid request' }, { status: 400 });
+    return Response.json({ error: 'Couldn’t send that — please try again.' }, { status: 400 });
   }
   if (!checkAiRateLimit(user.tenantId)) {
-    return Response.json({ error: 'Too many AI requests — try again in a minute.' }, { status: 429 });
+    return Response.json({ error: 'Too many requests — wait a minute and try again.' }, { status: 429 });
   }
 
   const [t] = await withTenant(user.tenantId, user.userId, (tx) =>
@@ -107,6 +107,7 @@ export async function POST(req: Request): Promise<Response> {
           permissions: user.permissions,
           executeQuery: (wrapped) => executeAnalyticsQuery(user.tenantId, user.userId, wrapped),
           stageAction: (kind, input) => stageAction(user, kind, input),
+          getDocument: (input) => getDocumentSnapshot(user, input),
           signal: abort.signal,
         });
         for await (const ev of events) {
@@ -118,7 +119,7 @@ export async function POST(req: Request): Promise<Response> {
       } catch (e) {
         if (!abort.signal.aborted) {
           console.error('assistant stream error:', e);
-          send({ type: 'error', message: 'The assistant hit a problem — please try again.' });
+          send({ type: 'error', message: 'Something went wrong on our side — please try again. If it keeps happening, tell the owner.' });
         }
       } finally {
         try { controller.close(); } catch { /* already closed */ }

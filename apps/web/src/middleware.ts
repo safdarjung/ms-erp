@@ -7,7 +7,11 @@ const SESSION_COOKIE = 'ms_session';
 const MAX_AGE = 30 * 24 * 60 * 60; // 30 days, refreshed each visit
 
 export function middleware(req: NextRequest) {
-  const res = NextResponse.next();
+  // Tell server components which page this is, so a signed-out person is sent
+  // back to it after logging in (see requireUser → /login?next=…).
+  const reqHeaders = new Headers(req.headers);
+  reqHeaders.set('x-pathname', req.nextUrl.pathname + req.nextUrl.search);
+  const res = NextResponse.next({ request: { headers: reqHeaders } });
   const token = req.cookies.get(SESSION_COOKIE)?.value;
   if (token) {
     res.cookies.set(SESSION_COOKIE, token, {

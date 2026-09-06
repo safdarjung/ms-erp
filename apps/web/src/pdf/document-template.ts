@@ -4,8 +4,15 @@
 // Every figure is computed upstream deterministically (@ms/core computeGst);
 // this file only PRESENTS stored values — it never recomputes legal numbers.
 
+import { formatSpecs, groupRuns, itemSpecs, splitColumns } from '@ms/core';
+
 export type TaxLine = { label: string; amount: number };
-export type DocColumn = { id: string; label: string };
+export type DocColumn = {
+  id: string;
+  label: string;
+  /** 'column' = its own table column · 'spec' = under the description · omitted = auto. */
+  display?: 'column' | 'spec';
+};
 export type DocItem = {
   description: string;
   hsn: string;
@@ -17,6 +24,8 @@ export type DocItem = {
   isTooling?: boolean;
   /** Part/section heading this row sits under (blank = ungrouped). */
   groupLabel?: string;
+  /** Detail printed beside the part heading (drawing no., component, material). */
+  groupNote?: string;
   /** Custom-column values keyed by DocColumn.id. */
   attributes?: Record<string, string>;
 };
@@ -77,8 +86,11 @@ const esc = (s: string) =>
 const multiline = (s: string) => esc(s).replace(/\r?\n/g, '<br>');
 
 export function renderDocumentHTML(d: DocumentData): string {
-  const cols = d.columns ?? [];
-  const K = cols.length;
+  // Custom fields split two ways (@ms/core decides — never re-implement the rule):
+  // `tableCols` get their own column, `specCols` print under the description as
+  // "Material: D2 · Hardness: 58–60 HRC" so a die with six specs still fits A4.
+  const { tableCols } = splitColumns(d.columns);
+  const K = tableCols.length;
   // Columns: S.No | Description | …custom | HSN | Qty | UOM | Rate | Amount.
   const NCOL = 7 + K;
 
@@ -91,7 +103,7 @@ export function renderDocumentHTML(d: DocumentData): string {
   const colgroupHtml = [
     `<col style="width:${fixed.sno}%">`,
     `<col style="width:${descW.toFixed(2)}%">`,
-    ...cols.map(() => `<col style="width:${custW.toFixed(2)}%">`),
+    ...tableCols.map(() => `<col style="width:${custW.toFixed(2)}%">`),
     `<col style="width:${fixed.hsn}%">`,
     `<col style="width:${fixed.qty}%">`,
     `<col style="width:${fixed.uom}%">`,
@@ -100,41 +112,38 @@ export function renderDocumentHTML(d: DocumentData): string {
   ].join('');
 
   const theadHtml = `<th>S.No</th><th>Description</th>${
-    cols.map((c) => `<th>${esc(c.label)}</th>`).join('')
+    tableCols.map((c) => `<th>${esc(c.label)}</th>`).join('')
   }<th>HSN/SAC</th><th>Qty</th><th>UOM</th><th>Rate (₹)</th><th>Amount (₹)</th>`;
 
-  const renderRow = (it: DocItem, sn: number) => `
+  const renderRow = (it: DocItem, sn: number) => {
+    const specs = formatSpecs(itemSpecs(d.columns, it.attributes));
+    return `
       <tr>
         <td class="c">${sn}</td>
-        <td class="desc">${multiline(it.description)}${it.isTooling ? '<div class="sub">One-time tooling / NRE charge</div>' : ''}</td>
-        ${cols.map((c) => `<td class="c">${esc(it.attributes?.[c.id] ?? '')}</td>`).join('')}
+        <td class="desc">${multiline(it.description)}${
+          specs ? `<div class="spec">${esc(specs)}</div>` : ''
+        }${it.isTooling ? '<div class="sub">One-time tooling charge</div>' : ''}</td>
+        ${tableCols.map((c) => `<td class="c">${esc(it.attributes?.[c.id] ?? '')}</td>`).join('')}
         <td class="c mono">${esc(it.hsn)}</td>
         <td class="r">${qty(it.qty)}</td>
         <td class="c">${esc(it.uom)}</td>
         <td class="r">${inr(it.rate)}</td>
         <td class="r">${inr(it.amount)}</td>
       </tr>`;
+  };
 
-  // Split into consecutive same-group segments; grouped segments get a heading
-  // row + a subtotal row, ungrouped rows render bare. S.No stays continuous.
-  type Seg = { group: string; items: DocItem[] };
-  const segments: Seg[] = [];
-  for (const it of d.items) {
-    const g = (it.groupLabel ?? '').trim();
-    const last = segments[segments.length - 1];
-    if (last && last.group === g) last.items.push(it);
-    else segments.push({ group: g, items: [it] });
-  }
-
+  // Consecutive rows sharing a part name print as one block (heading + subtotal);
+  // ungrouped rows render bare. S.No stays continuous across everything.
   let sn = 0;
-  const itemRows = segments.map((seg) => {
-    const body = seg.items.map((it) => renderRow(it, (sn += 1))).join('');
-    if (!seg.group) return body;
-    const sub = seg.items.reduce((s, it) => s + it.amount, 0);
+  const itemRows = groupRuns(d.items).map((run) => {
+    const body = run.items.map((it) => renderRow(it, (sn += 1))).join('');
+    if (!run.label) return body;
+    const sub = run.items.reduce((s, it) => s + it.amount, 0);
+    const note = run.note ? ` <span class="gnote">— ${esc(run.note)}</span>` : '';
     const header = `
-      <tr class="grouphdr"><td class="ghead" colspan="${NCOL}">${esc(seg.group)}</td></tr>`;
+      <tr class="grouphdr"><td class="ghead" colspan="${NCOL}">${esc(run.label)}${note}</td></tr>`;
     const subtotal = `
-      <tr class="subtot"><td class="subl" colspan="${NCOL - 1}">Subtotal — ${esc(seg.group)}</td><td class="subv">${inr(sub)}</td></tr>`;
+      <tr class="subtot"><td class="subl" colspan="${NCOL - 1}">Subtotal — ${esc(run.label)}</td><td class="subv">${inr(sub)}</td></tr>`;
     return header + body + subtotal;
   }).join('');
 
@@ -177,15 +186,29 @@ export function renderDocumentHTML(d: DocumentData): string {
       background: #fff; box-shadow: 0 2px 24px rgba(20, 30, 40, .18);
     }
   }
+  /* On a phone the on-screen preview shrinks to fit the width (print is unaffected). */
+  @media screen and (max-width: 640px) {
+    body { padding: 8px 0; }
+    .sheet { transform: scale(calc(100vw / 230mm)); transform-origin: top left; margin: 0; }
+  }
 
   /* ── Letterhead ─────────────────────────────────────────────── */
-  .band { background: #e6f4f8; text-align: center; padding: 12px 8px 9px; border-radius: 2px; }
+  .band { background: #e6f4f8; text-align: center; padding: 14px 8px 10px; border-radius: 2px; }
   .band .name {
+    /* inline-block so its box hugs the actual text — .band centres it exactly
+       as a block div would, but this also makes its rendered width measurable
+       (a block div's width would just be the band's, whatever the text is). */
+    display: inline-block;
     font-family: Georgia, 'Times New Roman', serif; font-style: italic; font-weight: 700;
-    font-size: 38px; line-height: 1.05; color: #1c8ea8; letter-spacing: 2px;
+    font-size: 48px; line-height: 1.05; color: #1c8ea8; letter-spacing: 2px;
   }
-  .addr { display: flex; flex-direction: column; gap: 1px; margin: 7px 2px 0; font-weight: 600; font-size: 10px; }
-  .addr .row { display: flex; justify-content: space-between; gap: 16px; }
+  /* Kept to the name's own width (set inline below, once rendered) and centred
+     under it, rather than spanning the full letterhead like the name doesn't. */
+  .addr {
+    display: flex; flex-direction: column; align-items: center; gap: 1px;
+    margin: 8px auto 0; max-width: 92%; font-weight: 600; font-size: 10px; text-align: center;
+  }
+  .addr .row { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 16px; }
   .addr .gst { white-space: nowrap; }
   .rule { border-top: 2.5px solid #111; margin: 7px 0 0; }
 
@@ -221,14 +244,21 @@ export function renderDocumentHTML(d: DocumentData): string {
   .mono { font-family: 'Courier New', monospace; font-size: 10px; }
   .desc { line-height: 1.5; }
   .desc .sub { font-style: italic; font-size: 9px; color: #444; margin-top: 1px; }
+  /* Fields shown under the description: "Material: D2 · Hardness: 58–60 HRC". */
+  .desc .spec { font-size: 9px; color: #333; line-height: 1.4; margin-top: 2px; overflow-wrap: anywhere; }
   /* Part grouping */
   tr.grouphdr td.ghead {
     background: #e9eef1; font-weight: 700; font-size: 10.5px; letter-spacing: .3px; padding: 6px 8px;
   }
   tr.grouphdr td.ghead::before { content: "▸ "; color: #1c8ea8; }
+  tr.grouphdr .gnote { font-weight: 400; font-size: 9.5px; color: #555; }
   tr.subtot td { background: #f7f9fa; font-weight: 600; }
   tr.subtot .subl { text-align: right; color: #333; }
   tr.subtot .subv { text-align: right; font-variant-numeric: tabular-nums; }
+  /* Rows carry spec lines now, so they can be several lines tall: never split
+     one across a page break, and never orphan a part heading at the bottom. */
+  table.items tbody tr:not(.fill) { break-inside: avoid; page-break-inside: avoid; }
+  tr.grouphdr { break-after: avoid; page-break-after: avoid; }
   tr.fill td { height: 100%; border-top: none; border-bottom: none; }
   tr.fill td:first-child { min-height: 18mm; }
 
@@ -336,5 +366,18 @@ export function renderDocumentHTML(d: DocumentData): string {
   </table>
   <div class="fine">Subject to Faridabad jurisdiction · E. &amp; O.E.${d.docLabel === 'QUOTATION' ? '' : ' · This is a computer-generated invoice.'}</div>
 </div>
+<script>
+  // Keep the address block no wider than the company name above it — measured
+  // live so it holds for any tenant's name/address length, then falls back to
+  // the CSS max-width if this can't run.
+  (function () {
+    var name = document.querySelector('.band .name');
+    var addr = document.querySelector('.addr');
+    if (!name || !addr) return;
+    var w = name.getBoundingClientRect().width;
+    // A floor keeps the address readable even for a very short company name.
+    if (w > 0) addr.style.maxWidth = Math.max(Math.ceil(w), 260) + 'px';
+  })();
+</script>
 </body></html>`;
 }

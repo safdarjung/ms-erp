@@ -6,14 +6,21 @@ const DISPLAY_ROW_CAP = 100;
 const STATEMENT_TIMEOUT_MS = 4000;
 
 /** Render a DB cell into something JSON-serializable and chart-friendly. */
+const DATE_FMT = new Intl.DateTimeFormat('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' });
+// A bare date or a Postgres timestamp(tz) as the driver may hand it back as text.
+const DATE_LIKE = /^\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}(:\d{2}(\.\d+)?)?\s*([+-]\d{2}(:?\d{2})?|Z)?)?$/;
+const fmtDate = (d: Date) => (Number.isNaN(d.getTime()) ? null : DATE_FMT.format(d));
+
 function toCell(v: unknown): string | number | boolean | null {
   if (v === null || v === undefined) return null;
   if (typeof v === 'number' || typeof v === 'boolean') return v;
   if (typeof v === 'bigint') return Number(v);
-  if (v instanceof Date) return v.toISOString().slice(0, 10);
+  if (v instanceof Date) return fmtDate(v) ?? null;
   const s = String(v);
   // numeric() columns arrive as strings — surface them as numbers when safe
   if (/^-?\d{1,12}(\.\d{1,6})?$/.test(s)) return Number(s);
+  // dates/timestamps arrive as text — show "17 Aug 2026", never "2026-08-17 03:48:55.677+00"
+  if (DATE_LIKE.test(s)) return fmtDate(new Date(s.replace(' ', 'T').replace(/([+-]\d{2})$/, '$1:00'))) ?? s;
   return s;
 }
 

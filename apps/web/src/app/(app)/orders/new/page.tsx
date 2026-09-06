@@ -19,10 +19,10 @@ export default async function NewOrderPage({
 
   return (
     <div className="max-w-4xl">
-      <p className="eyebrow">Sales</p>
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-semibold tracking-tight">New Order</h1>
-        <Link href="/orders" className="text-steel text-sm hover:underline">← Order book</Link>
+      <p className="text-xs text-muted">Quotations, orders &amp; bills</p>
+      <div className="flex items-center justify-between mb-6 gap-3 flex-wrap">
+        <h1 className="text-2xl font-semibold tracking-tight">New order</h1>
+        <Link href="/orders" className="text-steel text-sm hover:underline">← Orders</Link>
       </div>
       <OrderForm
         customers={customers}

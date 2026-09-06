@@ -8,10 +8,12 @@
   --surface-2: #f3f6f9;
   --ink: #141a21;
   --muted: #55606d;
-  --faint: #8792a0;
+  /* ≥4.5:1 on white — placeholders and hints must stay readable in daylight */
+  --faint: #5f6975;
   --line: #dce3ea;
   --line-strong: #c2ccd6;
-  --accent: #a65b12;
+  /* ≥5:1 on the page background and on accent-soft (active nav item) */
+  --accent: #8f4f0f;
   --accent-soft: #f5ead9;
   --steel: #2e5c86;
   --ok: #2c7a56;
@@ -37,7 +39,10 @@
     @apply font-mono text-[0.68rem] uppercase tracking-[0.12em] text-accent font-semibold;
   }
   .card {
-    @apply bg-surface border border-line rounded-lg;
+    /* `relative` keeps absolutely-positioned helpers (e.g. Tailwind's sr-only
+       labels inside a scrolling table) inside the card instead of letting them
+       escape to the viewport and widen the page on phones. */
+    @apply relative bg-surface border border-line rounded-lg;
   }
   .btn {
     @apply inline-flex items-center justify-center gap-2 rounded font-medium text-sm px-3.5 py-2 transition-colors;
@@ -79,11 +84,30 @@
   }
 }
 
-/* Phones: 16px inputs stop iOS Safari from zooming the page on focus. */
+/* Phones: 16px inputs stop iOS Safari from zooming the page on focus, and
+   every control is at least 44px tall so it can be hit with a thumb. */
 @media (max-width: 640px) {
   .field, select.field, textarea.field {
     font-size: 16px;
   }
+  .field, select.field, .btn {
+    min-height: 44px;
+  }
+}
+
+/* Respect "reduce motion" — no pulsing, sliding or fading for those users. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+/* Visually hidden but readable by screen readers (labels for icon-only controls). */
+.sr-only-text {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
 }
 
 @keyframes toast-in {

@@ -1,33 +1,48 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
+import { LEAD_STAGE_LABELS, MATERIAL_OWNERSHIP_LABELS, ORDER_CATEGORY_LABELS, PAYMENT_METHOD_LABELS } from '@ms/core';
+import { ShortcutKbd } from '@/components/shortcut-kbd';
 import { MicButton } from './mic-button';
+import { ChangeList, DocPreview, type PreviewDocMeta } from './doc-preview';
+import { DocumentReviewModal } from './document-review';
 
 // ── Types mirrored from the NDJSON protocol of /api/assistant ───────────────
 
 type ChartSpec = { title: string; kind: 'bar'; labels: string[]; values: number[] };
 type Cell = string | number | boolean | null;
 type EditField = { key: string; label: string; type: 'text' | 'number' | 'date' | 'textarea' | 'select'; options?: string[] };
-type EditItem = { description: string; hsn?: string; qty: number; uom?: string; rate: number; gstRate: number; isToolingCharge?: boolean; groupLabel?: string; attributes?: Record<string, string> };
-type EditColumn = { id: string; label: string };
+type EditItem = { description: string; hsn?: string; qty: number; uom?: string; rate: number; gstRate: number; isToolingCharge?: boolean; groupLabel?: string; groupNote?: string; attributes?: Record<string, string> };
+type EditColumn = { id: string; label: string; display?: 'column' | 'spec' };
 type ActionInfo = {
   actionId: string;
   kind: string;
   title: string;
   details: { label: string; value: string }[];
   items?: string[];
+  changes?: string[];
   warning?: string;
   editable?: EditField[];
   payload?: Record<string, unknown>;
   editItems?: EditItem[];
+  doc?: PreviewDocMeta;
 };
 type ActionPhase = 'pending' | 'executing' | 'executed' | 'cancelled' | 'failed';
+type ActionPart = {
+  kind: 'action'; action: ActionInfo; phase: ActionPhase; result?: string;
+  /** In-app page of the saved record ("Open quotation →"). */
+  path?: string;
+  /** Print/PDF page (quotations and bills) — opens in a new tab. */
+  printPath?: string;
+  /** What was saved (quotation / invoice / order / customer / lead) — picks the link wording. */
+  entityType?: string;
+};
 type Part =
   | { kind: 'text'; text: string }
   | { kind: 'tool'; label: string; done: boolean }
   | { kind: 'table'; title: string; columns: string[]; rows: Cell[][] }
   | { kind: 'chart'; spec: ChartSpec }
-  | { kind: 'action'; action: ActionInfo; phase: ActionPhase; result?: string; path?: string }
+  | ActionPart
   | { kind: 'nav'; label: string; path: string; newTab?: boolean };
 type Msg =
   | { role: 'user'; text: string; hidden?: boolean; files?: string[] }
@@ -60,36 +75,114 @@ function fileToBase64(file: File): Promise<string> {
 
 const isImageMime = (m: string) => m.startsWith('image/');
 
-const DEFAULT_SUGGESTIONS = [
-  'What needs my attention today?',
-  'Top 5 customers by invoiced value',
-  'Record a lead: Bharat Pumps — VMC job work enquiry, approx ₹1.2L',
-  'Sharma Auto ke liye pichhle rate pe ek quotation banao',
-  'इस महीने कितनी बिक्री हुई?',
+// ── Thread persistence (survives a reload / navigation within the tab) ──────
+
+const THREAD_KEY = 'ms-assistant:thread:v2';
+const WIDE_KEY = 'ms-assistant:wide';
+const MAX_STORED_MSGS = 60;
+
+function loadThread(): Msg[] {
+  try {
+    const raw = window.sessionStorage.getItem(THREAD_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as Msg[];
+    if (!Array.isArray(parsed)) return [];
+    // Nothing is in flight after a reload: settle spinners; an action that was
+    // mid-execution is unknowable here — say so rather than pretend.
+    return parsed.map((m) => m.role === 'assistant'
+      ? { ...m, parts: m.parts.map((p) =>
+          p.kind === 'tool' ? { ...p, done: true }
+          : p.kind === 'action' && p.phase === 'executing'
+            ? { ...p, phase: 'failed' as const, result: 'The page reloaded while this was saving. Open the quotation / bill list to check whether it was saved.' }
+            : p) }
+      : m);
+  } catch { return []; }
+}
+function saveThread(msgs: Msg[]) {
+  try {
+    if (!msgs.length) window.sessionStorage.removeItem(THREAD_KEY);
+    else window.sessionStorage.setItem(THREAD_KEY, JSON.stringify(msgs.slice(-MAX_STORED_MSGS)));
+  } catch { /* quota / private mode — non-fatal */ }
+}
+
+// Starter prompts. Questions send on tap. "✎" examples are things the AI will
+// DO — they fill the box as a template ([customer], [rate]…) so the user edits
+// the blanks before sending, rather than firing a half-made request.
+type Suggestion = { text: string; fill?: boolean };
+const ask = (text: string): Suggestion => ({ text });
+const write = (text: string): Suggestion => ({ text: `✎ ${text}`, fill: true });
+const QUOTE_TEMPLATE = write('Quotation for [customer]: [die] ₹[rate], [die] ₹[rate]');
+const ENQUIRY_TEMPLATE = write('New enquiry: [company] — [what they need], approx ₹[value]');
+const DEFAULT_SUGGESTIONS: Suggestion[] = [
+  ask('What needs my attention today?'),
+  QUOTE_TEMPLATE,
+  ask('Kisne payment nahi di?'),
+  ENQUIRY_TEMPLATE,
+  ask('इस महीने कितनी बिक्री हुई?'),
 ];
 
 const UUID_SEG = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 
 /** Starter prompts tuned to the screen the user is on (falls back to the defaults). */
-function suggestionsFor(path: string | null): string[] {
+function suggestionsFor(path: string | null): Suggestion[] {
   if (!path) return DEFAULT_SUGGESTIONS;
   const onRecord = (base: string) => path.startsWith(base + '/') && UUID_SEG.test(path);
-  if (onRecord('/invoices')) return ['Record a payment on this invoice', 'What is still outstanding on this bill?', 'Open this invoice as a PDF', 'Cancel this invoice'];
-  if (onRecord('/quotations')) return ['Mark this quotation as sent', 'Convert this quotation to an invoice', 'Revise the rates on this quotation', 'Open this quotation as a PDF'];
-  if (onRecord('/orders')) return ['Move this order to In production', 'Raise a GST invoice from this order', 'Mark this order delivered'];
-  if (onRecord('/customers')) return ['Draft a quotation for this customer', "Show this customer's outstanding invoices", 'What have we billed this customer this year?'];
-  if (onRecord('/leads')) return ['Log a call on this lead', 'Set a follow-up for this lead next Monday', 'Convert this lead to a customer'];
-  if (path.startsWith('/leads')) return ['What follow-ups are due today?', 'Record a lead: Bharat Pumps — VMC job work, approx ₹1.2L', 'Leads by source this month'];
-  if (path.startsWith('/invoices')) return ['Who owes us money right now?', 'What did we invoice this month?', "This year's overdue invoices"];
-  if (path.startsWith('/quotations')) return ['Open quotations not yet converted', 'Sharma Auto ke liye pichhle rate pe quotation banao', 'Quotation win-rate this year'];
-  if (path.startsWith('/orders')) return ['Orders due for delivery this week', 'Open orders not yet invoiced', 'Order book value by category'];
-  if (path.startsWith('/customers')) return ['Top 5 customers by invoiced value', 'Customers with overdue balances', 'New customers added this month'];
+  if (onRecord('/invoices')) return [
+    write('Payment received on this bill: ₹[amount] by [UPI / bank]'),
+    write('Line [3] ka rate [32,000] karo'),
+    write('Add a note to this bill: [goods sent via …]'),
+    ask('How much is still due on this bill?'),
+    ask('Open this bill as a PDF'),
+  ];
+  if (onRecord('/quotations')) return [
+    write('Increase all rates on this quotation by [5]%'),
+    write('Add a "[Steel grade]" column to this quotation'),
+    write('Copy this quotation for [customer]'),
+    write('Make a bill from this quotation'),
+    ask('Open this quotation as a PDF'),
+  ];
+  if (onRecord('/orders')) return [
+    write('Mark this order as In production'),
+    write('Set the delivery date of this order to [next Friday]'),
+    write('Make the bill for this order'),
+    write('Mark this order as Delivered'),
+  ];
+  if (onRecord('/customers')) return [
+    write('Quotation for this customer: [die] ₹[rate], [die] ₹[rate]'),
+    write('Copy this customer’s last quotation with [5]% higher rates'),
+    ask('Bills still due from this customer'),
+    ask('What have we billed this customer this year?'),
+  ];
+  if (onRecord('/leads')) return [
+    write('Add a call note to this enquiry: [what was discussed]'),
+    write('Follow up on this enquiry next [Monday]'),
+    write('Add this enquiry as a customer'),
+  ];
+  if (path.startsWith('/leads')) return [ask('Which follow-ups are due today?'), ENQUIRY_TEMPLATE, ask('Enquiries by source this month')];
+  if (path.startsWith('/invoices')) return [
+    ask('Kisne payment nahi di?'),
+    ask('What did we bill this month?'),
+    write('Change bill [INV/26-27/0012]: line [1] qty [2]'),
+    ask('Overdue bills this year'),
+  ];
+  if (path.startsWith('/quotations')) return [
+    QUOTE_TEMPLATE,
+    write('Copy the last quotation for [customer] with [5]% higher rates'),
+    ask('Quotations still waiting for a reply'),
+    ask('How many quotations turned into bills this year?'),
+  ];
+  if (path.startsWith('/orders')) return [ask('Orders due for delivery this week'), ask('Open orders with no bill yet'), ask('Order value by category')];
+  if (path.startsWith('/customers')) return [ask('Top 5 customers by billing this year'), ask('Customers with overdue bills'), ask('New customers added this month')];
   return DEFAULT_SUGGESTIONS;
 }
 
-/** Open the assistant from anywhere: window.dispatchEvent(new CustomEvent('ms-assistant', {detail:{question}})) */
-export function openAssistant(question?: string) {
-  window.dispatchEvent(new CustomEvent('ms-assistant', { detail: { question } }));
+/**
+ * Open the assistant from anywhere. With a question it sends it; with
+ * `fill: true` it only puts the text in the box (for templates the user
+ * should finish first).
+ */
+export function openAssistant(question?: string, opts?: { fill?: boolean }) {
+  window.dispatchEvent(new CustomEvent('ms-assistant', { detail: { question, fill: opts?.fill } }));
 }
 
 // ── Small render helpers ────────────────────────────────────────────────────
@@ -137,6 +230,9 @@ function TextPart({ text }: { text: string }) {
   );
 }
 
+/** snake_case SQL aliases → "Doc date". */
+const headerLabel = (c: string) => { const t = c.replaceAll('_', ' ').trim(); return t.charAt(0).toUpperCase() + t.slice(1); };
+
 function TablePart({ title, columns, rows }: { title: string; columns: string[]; rows: Cell[][] }) {
   if (!columns.length) return <div className="text-xs text-faint italic">No rows.</div>;
   return (
@@ -147,7 +243,7 @@ function TablePart({ title, columns, rows }: { title: string; columns: string[];
           <thead className="sticky top-0 bg-surface">
             <tr className="text-left text-faint border-b border-line">
               {columns.map((c) => (
-                <th key={c} className="px-3 py-1.5 font-medium whitespace-nowrap">{c.replaceAll('_', ' ')}</th>
+                <th key={c} className="px-3 py-1.5 font-medium whitespace-nowrap">{headerLabel(c)}</th>
               ))}
             </tr>
           </thead>
@@ -195,98 +291,95 @@ function ChartPart({ spec }: { spec: ChartSpec }) {
 // ── Action confirmation card ────────────────────────────────────────────────
 
 const PHASE_CHIP: Record<ActionPhase, { label: string; cls: string }> = {
-  pending: { label: 'Awaiting confirmation', cls: 'bg-accent-soft text-accent' },
-  executing: { label: 'Running…', cls: 'bg-accent-soft text-accent animate-pulse' },
-  executed: { label: '✓ Done', cls: 'bg-[#e4f1ea] text-ok' },
-  cancelled: { label: 'Cancelled', cls: 'bg-surface-2 text-muted' },
-  failed: { label: 'Failed', cls: 'bg-[#f6e5e1] text-crit' },
+  pending: { label: 'Needs your OK', cls: 'bg-accent-soft text-accent' },
+  executing: { label: 'Saving…', cls: 'bg-accent-soft text-accent animate-pulse' },
+  executed: { label: '✓ Saved', cls: 'bg-[#e4f1ea] text-ok' },
+  cancelled: { label: 'Not saved', cls: 'bg-surface-2 text-muted' },
+  failed: { label: 'Couldn’t save', cls: 'bg-[#f6e5e1] text-crit' },
 };
 
-type CardRow = { description: string; hsn?: string; qty: string; uom?: string; rate: string; gstRate: string; isToolingCharge?: boolean; groupLabel?: string; attributes: Record<string, string> };
-let cardColSeq = 0;
-const newCardColId = () => `col_${Date.now().toString(36)}${(cardColSeq++).toString(36)}`;
+// Totals the document preview already shows in its footer — don't repeat them.
+const TOTAL_LABELS = new Set(['Subtotal (before GST)', 'IGST', 'CGST + SGST', 'Total', 'Order value (before GST)']);
+
+/** The "Yes" button, worded for what the card does. */
+function primaryLabel(kind: string, edited: boolean): string {
+  if (edited) return 'Save my changes';
+  if (kind.startsWith('delete_')) return 'Yes, delete';
+  if (kind === 'record_payment') return 'Yes, record payment';
+  if (kind === 'convert_lead_to_customer') return 'Yes, add customer';
+  if (kind.startsWith('convert_')) return 'Yes, make it';
+  if (kind.startsWith('create_') || kind === 'duplicate_quotation') return 'Yes, create it';
+  if (kind.startsWith('update_') || kind.startsWith('set_')) return 'Yes, save changes';
+  return 'Yes, save it';
+}
+
+const OPEN_LABEL: Record<string, string> = {
+  quotation: 'Open quotation', invoice: 'Open bill', order: 'Open order', customer: 'Open customer', lead: 'Open enquiry',
+};
+/** Icon-only controls keep a 44px hit area on phones even though the glyph is small. */
+const HIT = 'min-h-11 min-w-11 inline-flex items-center justify-center';
+const AI_OFF = 'The AI assistant is switched off. Ask the person who set up the app to turn it on. Everything else works as normal.';
+
+const columnsOf = (payload?: Record<string, unknown>): EditColumn[] => {
+  const cd = payload?.columnDefs;
+  if (!Array.isArray(cd)) return [];
+  // Keep each field's display choice — the preview needs it to decide what is a
+  // column and what prints under the item.
+  return cd.map((raw) => {
+    const c = raw as EditColumn;
+    const display = c.display === 'column' || c.display === 'spec' ? c.display : undefined;
+    return { id: String(c.id), label: String(c.label), ...(display ? { display } : {}) };
+  });
+};
+
+/** Select options on the card read as labels, never stored keys. */
+function optionLabel(fieldKey: string, value: string): string {
+  if (fieldKey === 'stage') return LEAD_STAGE_LABELS[value as keyof typeof LEAD_STAGE_LABELS] ?? value;
+  if (fieldKey === 'method') return PAYMENT_METHOD_LABELS[value as keyof typeof PAYMENT_METHOD_LABELS] ?? value;
+  if (fieldKey === 'orderCategory') return ORDER_CATEGORY_LABELS[value as keyof typeof ORDER_CATEGORY_LABELS] ?? value;
+  if (fieldKey === 'materialOwnership') return MATERIAL_OWNERSHIP_LABELS[value as keyof typeof MATERIAL_OWNERSHIP_LABELS] ?? value;
+  if (fieldKey === 'regType') return value === 'registered' ? 'Registered' : 'Not registered';
+  const spaced = value.replace(/_/g, ' ');
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+}
 
 function ActionCard({
-  part,
-  busy,
-  onDecide,
-  onOpen,
+  part, busy, onDecide, onOpen, onReview,
 }: {
-  part: Extract<Part, { kind: 'action' }>;
+  part: ActionPart;
   busy: boolean;
   onDecide: (actionId: string, decision: 'confirm' | 'cancel', edited?: Record<string, unknown>) => void;
   onOpen: (path: string) => void;
+  onReview: (actionId: string) => void;
 }) {
   const a = part.action;
   const chip = PHASE_CHIP[part.phase];
+  const isDelete = a.kind.startsWith('delete_');
   const border =
     part.phase === 'executed' ? 'border-ok/40' :
     part.phase === 'failed' ? 'border-crit/40' :
     part.phase === 'cancelled' ? 'border-line' : 'border-accent/50';
-  const canEdit = part.phase === 'pending' && !!a.editable?.length;
+  const pending = part.phase === 'pending';
+  // Documents (quotation / invoice / order proposals) open the full editor;
+  // simple records (customer, lead, payment) edit their fields inline.
+  const isDoc = !!a.doc && Array.isArray(a.editItems);
+  const canEdit = pending && !!a.editable?.length;
 
-  const [editing, setEditing] = useState(false);
-  const [form, setForm] = useState<Record<string, string>>(() => {
+  const initialForm = () => {
     const f: Record<string, string> = {};
     for (const fld of a.editable ?? []) f[fld.key] = a.payload?.[fld.key] == null ? '' : String(a.payload[fld.key]);
     return f;
-  });
-  const toRow = (it: EditItem): CardRow => ({
-    description: it.description, hsn: it.hsn, qty: String(it.qty), uom: it.uom,
-    rate: String(it.rate), gstRate: String(it.gstRate), isToolingCharge: it.isToolingCharge,
-    groupLabel: it.groupLabel ?? '', attributes: { ...(it.attributes ?? {}) },
-  });
-  const initialColumns = (): EditColumn[] => {
-    const cd = a.payload?.columnDefs;
-    return Array.isArray(cd) ? cd.map((c) => ({ id: String((c as EditColumn).id), label: String((c as EditColumn).label) })) : [];
   };
-  const [rows, setRows] = useState<CardRow[]>(() => (a.editItems ?? []).map(toRow));
-  const [columns, setColumns] = useState<EditColumn[]>(initialColumns);
-  const updateRow = (i: number, patch: Partial<CardRow>) => setRows((rs) => rs.map((r, x) => (x === i ? { ...r, ...patch } : r)));
-  const setAttr = (i: number, colId: string, val: string) =>
-    setRows((rs) => rs.map((r, x) => (x === i ? { ...r, attributes: { ...r.attributes, [colId]: val } } : r)));
-  const addColumn = () => setColumns((cs) => (cs.length < 12 ? [...cs, { id: newCardColId(), label: `Column ${cs.length + 1}` }] : cs));
-  const renameColumn = (id: string, label: string) => setColumns((cs) => cs.map((c) => (c.id === id ? { ...c, label } : c)));
-  const removeColumn = (id: string) => {
-    setColumns((cs) => cs.filter((c) => c.id !== id));
-    setRows((rs) => rs.map((r) => { const { [id]: _drop, ...rest } = r.attributes; return { ...r, attributes: rest }; }));
-  };
-  const hasTooling = (a.editItems ?? []).some((it) => it.isToolingCharge !== undefined);
-
-  const discard = () => {
-    const f: Record<string, string> = {};
-    for (const fld of a.editable ?? []) f[fld.key] = a.payload?.[fld.key] == null ? '' : String(a.payload[fld.key]);
-    setForm(f);
-    setRows((a.editItems ?? []).map(toRow));
-    setColumns(initialColumns());
-    setEditing(false);
-  };
+  const [editing, setEditing] = useState(false);
+  const [form, setForm] = useState<Record<string, string>>(initialForm);
+  const discard = () => { setForm(initialForm()); setEditing(false); };
   const submit = () => {
     if (!editing) { onDecide(a.actionId, 'confirm'); return; }
-    const edited: Record<string, unknown> = { ...(a.payload ?? {}), ...form };
-    if (a.editItems) {
-      const colIds = new Set(columns.map((c) => c.id));
-      edited.items = rows.filter((r) => r.description.trim()).map((r) => {
-        const attributes: Record<string, string> = {};
-        for (const [k, v] of Object.entries(r.attributes)) if (colIds.has(k) && v.trim()) attributes[k] = v;
-        const gl = (r.groupLabel ?? '').trim();
-        return {
-          description: r.description, hsn: r.hsn, qty: Number(r.qty) || 0, uom: r.uom,
-          rate: Number(r.rate) || 0, gstRate: Number(r.gstRate) || 0,
-          ...(hasTooling ? { isToolingCharge: !!r.isToolingCharge } : {}),
-          ...(gl ? { groupLabel: gl } : {}),
-          attributes,
-        };
-      });
-      // Send columns when the doc has (or had) any — never wipe columns on a plain edit that never touched them.
-      if (columns.length > 0 || Array.isArray(a.payload?.columnDefs)) {
-        edited.columnDefs = columns
-          .map((c) => ({ id: c.id, label: (c.label ?? '').trim() }))
-          .filter((c) => c.label);
-      }
-    }
-    onDecide(a.actionId, 'confirm', edited);
+    onDecide(a.actionId, 'confirm', { ...(a.payload ?? {}), ...form });
   };
+
+  const details = isDoc ? a.details.filter((d) => !TOTAL_LABELS.has(d.label)) : a.details;
+  const showPreview = !editing || !pending;
 
   return (
     <div className={`border ${border} rounded-xl bg-surface overflow-hidden shadow-sm`}>
@@ -297,11 +390,11 @@ function ActionCard({
       </div>
 
       {/* Read-only preview */}
-      {(!editing || part.phase !== 'pending') && (a.details.length > 0 || a.items?.length || a.warning) && (
+      {showPreview && (details.length > 0 || a.items?.length || a.changes?.length || a.warning || isDoc) && (
         <div className="px-3.5 py-2.5 space-y-2">
-          {a.details.length > 0 && (
+          {details.length > 0 && (
             <dl className="text-xs space-y-1">
-              {a.details.map((d, i) => (
+              {details.map((d, i) => (
                 <div key={i} className="flex gap-2">
                   <dt className="text-faint w-28 shrink-0">{d.label}</dt>
                   <dd className="text-ink min-w-0">{d.value}</dd>
@@ -309,117 +402,88 @@ function ActionCard({
               ))}
             </dl>
           )}
-          {a.items && a.items.length > 0 && (
+          {a.changes && a.changes.length > 0 && <ChangeList changes={a.changes} />}
+          {isDoc ? (
+            <DocPreview lines={a.editItems!} columns={columnsOf(a.payload)} doc={a.doc!} />
+          ) : a.items && a.items.length > 0 ? (
             <div className="border border-line rounded-lg bg-surface-2/50 px-3 py-2 text-xs space-y-1">
               {a.items.map((line, i) => <div key={i} className="text-ink">{line}</div>)}
             </div>
-          )}
+          ) : null}
           {a.warning && part.phase !== 'executed' && (
             <div className="text-xs text-crit flex gap-1.5"><span aria-hidden>⚠</span><span>{a.warning}</span></div>
           )}
         </div>
       )}
 
-      {/* Edit mode */}
-      {editing && part.phase === 'pending' && (
+      {/* Inline edit for simple records */}
+      {editing && pending && !isDoc && (
         <div className="px-3.5 py-2.5 space-y-2.5">
           <div className="grid grid-cols-2 gap-2">
             {(a.editable ?? []).map((fld) => (
               <label key={fld.key} className={`text-xs ${fld.type === 'textarea' ? 'col-span-2' : ''}`}>
-                <span className="text-faint">{fld.label}</span>
+                <span className="text-muted">{fld.label}</span>
                 {fld.type === 'textarea' ? (
-                  <textarea value={form[fld.key] ?? ''} onChange={(e) => setForm((f) => ({ ...f, [fld.key]: e.target.value }))} rows={2} className="field !py-1 mt-0.5" />
+                  <textarea value={form[fld.key] ?? ''} onChange={(e) => setForm((f) => ({ ...f, [fld.key]: e.target.value }))} rows={2} className="field sm:!py-1 mt-0.5" />
                 ) : fld.type === 'select' ? (
-                  <select value={form[fld.key] ?? ''} onChange={(e) => setForm((f) => ({ ...f, [fld.key]: e.target.value }))} className="field !py-1 mt-0.5 capitalize">
-                    {(fld.options ?? []).map((o) => <option key={o} value={o}>{o.replace(/_/g, ' ')}</option>)}
+                  <select value={form[fld.key] ?? ''} onChange={(e) => setForm((f) => ({ ...f, [fld.key]: e.target.value }))} className="field sm:!py-1 mt-0.5">
+                    {(fld.options ?? []).map((o) => <option key={o} value={o}>{optionLabel(fld.key, o)}</option>)}
                   </select>
                 ) : (
                   <input type={fld.type === 'number' ? 'number' : fld.type === 'date' ? 'date' : 'text'}
                     value={form[fld.key] ?? ''} onChange={(e) => setForm((f) => ({ ...f, [fld.key]: e.target.value }))}
-                    className="field !py-1 mt-0.5" inputMode={fld.type === 'number' ? 'decimal' : undefined} />
+                    className="field sm:!py-1 mt-0.5" inputMode={fld.type === 'number' ? 'decimal' : undefined} />
                 )}
               </label>
             ))}
           </div>
-          {a.editItems && (
-            <div className="space-y-2">
-              <div className="flex items-center justify-between gap-2">
-                <div className="text-[0.62rem] font-mono uppercase tracking-wider text-faint">Line items</div>
-                <button type="button" onClick={addColumn} disabled={columns.length >= 12} className="text-[0.7rem] text-accent disabled:opacity-40">+ Add column</button>
-              </div>
-              {columns.length > 0 && (
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="text-[0.6rem] font-mono uppercase text-faint">Columns</span>
-                  {columns.map((c) => (
-                    <span key={c.id} className="inline-flex items-center gap-1 rounded border border-line bg-surface pl-1.5 pr-0.5 py-0.5">
-                      <input value={c.label} onChange={(e) => renameColumn(c.id, e.target.value)} className="bg-transparent text-[0.7rem] w-20 outline-none" aria-label="Column name" />
-                      <button type="button" onClick={() => removeColumn(c.id)} className="text-crit text-[0.7rem] px-0.5" aria-label="Remove column">✕</button>
-                    </span>
-                  ))}
-                </div>
-              )}
-              {rows.map((r, i) => (
-                <div key={i} className="border border-line rounded-lg p-2 space-y-1.5 bg-surface-2/40">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[0.6rem] font-mono uppercase text-faint">Line {i + 1}</span>
-                    <button type="button" onClick={() => setRows((rs) => rs.filter((_, x) => x !== i))} className="text-crit text-[0.7rem]">Remove</button>
-                  </div>
-                  <input value={r.description} onChange={(e) => updateRow(i, { description: e.target.value })} className="field !py-1 text-xs" placeholder="Description" />
-                  <input value={r.groupLabel ?? ''} onChange={(e) => updateRow(i, { groupLabel: e.target.value })} className="field !py-1 text-xs" placeholder="Part / group (optional)" aria-label="Part / group" />
-                  {columns.length > 0 && (
-                    <div className="grid grid-cols-2 gap-1.5">
-                      {columns.map((c) => (
-                        <input key={c.id} value={r.attributes[c.id] ?? ''} onChange={(e) => setAttr(i, c.id, e.target.value)} className="field !py-1 text-xs" placeholder={c.label || 'Value'} aria-label={c.label || 'Column value'} />
-                      ))}
-                    </div>
-                  )}
-                  <div className="grid grid-cols-3 gap-1.5">
-                    <input value={r.qty} onChange={(e) => updateRow(i, { qty: e.target.value })} className="field !py-1 text-xs" inputMode="decimal" placeholder="Qty" aria-label="Qty" />
-                    <input value={r.rate} onChange={(e) => updateRow(i, { rate: e.target.value })} className="field !py-1 text-xs" inputMode="decimal" placeholder="Rate" aria-label="Rate" />
-                    <input value={r.gstRate} onChange={(e) => updateRow(i, { gstRate: e.target.value })} className="field !py-1 text-xs" inputMode="decimal" placeholder="GST%" aria-label="GST %" />
-                  </div>
-                  {hasTooling && (
-                    <label className="flex items-center gap-1.5 text-[0.7rem] text-muted"><input type="checkbox" checked={!!r.isToolingCharge} onChange={(e) => updateRow(i, { isToolingCharge: e.target.checked })} /> Tooling / NRE</label>
-                  )}
-                </div>
-              ))}
-              <button type="button" onClick={() => setRows((rs) => [...rs, { description: '', hsn: '84807100', qty: '1', uom: 'NOS', rate: '', gstRate: '18', groupLabel: '', attributes: {}, ...(hasTooling ? { isToolingCharge: false } : {}) }])} className="text-xs text-accent">+ Add line</button>
-            </div>
-          )}
-          <p className="text-[0.7rem] text-faint">Totals &amp; GST are recomputed after you save.</p>
         </div>
       )}
 
-      {part.phase === 'pending' && (
+      {pending && (
         <div className="border-t border-line bg-surface-2/40">
           {canEdit && (
-            <button onClick={() => (editing ? discard() : setEditing(true))} disabled={busy}
-              className="w-full text-left px-3.5 pt-2 text-xs text-steel hover:underline disabled:opacity-50">
-              {editing ? '↩ Discard edits' : '✎ Edit before confirming'}
-            </button>
+            isDoc ? (
+              <button onClick={() => onReview(a.actionId)} disabled={busy}
+                className="w-full text-left px-3.5 py-2 min-h-11 sm:min-h-0 sm:pt-2 sm:pb-0 text-xs text-steel hover:underline disabled:opacity-50">
+                ✎ Check or change the lines
+              </button>
+            ) : (
+              <button onClick={() => (editing ? discard() : setEditing(true))} disabled={busy}
+                className="w-full text-left px-3.5 py-2 min-h-11 sm:min-h-0 sm:pt-2 sm:pb-0 text-xs text-steel hover:underline disabled:opacity-50">
+                {editing ? '↩ Undo my changes' : '✎ Change details'}
+              </button>
+            )
           )}
           <div className="flex gap-2 px-3.5 py-2.5">
-            <button onClick={submit} disabled={busy} className="btn-primary !py-1.5 text-xs flex-1 disabled:opacity-50">
-              {editing ? 'Save & run' : 'Confirm & run'}
+            <button onClick={submit} disabled={busy}
+              className={`btn-primary flex-1 sm:!py-1.5 sm:text-xs disabled:opacity-50 ${isDelete ? '!bg-crit' : ''}`}>
+              {primaryLabel(a.kind, editing)}
             </button>
-            <button onClick={() => onDecide(a.actionId, 'cancel')} disabled={busy} className="btn-ghost !py-1.5 text-xs disabled:opacity-50">
-              Cancel
+            <button onClick={() => onDecide(a.actionId, 'cancel')} disabled={busy} className="btn-ghost sm:!py-1.5 sm:text-xs disabled:opacity-50">
+              Not now
             </button>
           </div>
         </div>
       )}
       {part.phase === 'executed' && part.result && (
-        <div className="px-3.5 py-2.5 border-t border-line text-xs flex items-center gap-2">
-          <span className="text-ok flex-1">{part.result}</span>
+        <div className="px-3.5 py-2.5 border-t border-line text-xs flex flex-wrap items-center gap-x-3 gap-y-1">
+          <span className="text-ok flex-1 min-w-[10rem]">{part.result}</span>
           {part.path && (
-            <button onClick={() => onOpen(part.path!)} className="text-accent font-medium hover:underline shrink-0">
-              Open →
+            <button onClick={() => onOpen(part.path!)} className="text-accent font-medium hover:underline shrink-0 min-h-11 sm:min-h-0">
+              {(part.entityType && OPEN_LABEL[part.entityType]) ?? 'Open'} →
             </button>
+          )}
+          {part.printPath && (
+            <a href={part.printPath} target="_blank" rel="noopener noreferrer"
+              className="text-accent font-medium hover:underline shrink-0 inline-flex items-center min-h-11 sm:min-h-0">
+              PDF ↗
+            </a>
           )}
         </div>
       )}
       {part.phase === 'failed' && part.result && (
-        <div className="px-3.5 py-2.5 border-t border-line text-xs text-crit">{part.result}</div>
+        <div className="px-3.5 py-2.5 border-t border-line text-xs text-crit" role="alert">{part.result}</div>
       )}
     </div>
   );
@@ -449,14 +513,36 @@ export function AssistantPanel({ enabled }: { enabled: boolean }) {
   const pathnameRef = useRef(pathname);
   pathnameRef.current = pathname;
   const [open, setOpen] = useState(false);
+  // The closed drawer must leave the layout entirely: an off-canvas fixed panel
+  // (translate-x-full) still widens document.scrollWidth on some browsers once
+  // it holds a wide table, letting every page scroll sideways into blank space.
+  // So: mount → next frame slide in; slide out → then display:none.
+  const [rendered, setRendered] = useState(false);
+  const [shown, setShown] = useState(false);
+  useEffect(() => {
+    if (open) {
+      setRendered(true);
+      const id = requestAnimationFrame(() => setShown(true));
+      return () => cancelAnimationFrame(id);
+    }
+    setShown(false);
+    const t = setTimeout(() => setRendered(false), 220);
+    return () => clearTimeout(t);
+  }, [open]);
+  const [wide, setWide] = useState(false);
   const [busy, setBusy] = useState(false);
   const [input, setInput] = useState('');
   const [micStop, setMicStop] = useState(0); // bump to force-stop voice dictation
   const dictationBase = useRef(''); // input text captured when voice dictation starts
   const [msgs, setMsgs] = useState<Msg[]>([]);
+  const [hydrated, setHydrated] = useState(false);
   const [files, setFiles] = useState<PendingFile[]>([]); // staged attachments for the next send
   const [attachErr, setAttachErr] = useState<string | null>(null);
+  const [review, setReview] = useState<string | null>(null); // actionId open in the document editor
+  const reviewRef = useRef<string | null>(null);
+  reviewRef.current = review;
   const abortRef = useRef<AbortController | null>(null);
+  const asideRef = useRef<HTMLElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -470,8 +556,24 @@ export function AssistantPanel({ enabled }: { enabled: boolean }) {
     setMsgs(msgsRef.current);
   }, []);
 
+  // Restore the thread + layout preference once on mount; persist afterwards.
+  useEffect(() => {
+    const saved = loadThread();
+    if (saved.length) updateMsgs(() => saved);
+    try { setWide(window.localStorage.getItem(WIDE_KEY) === '1'); } catch { /* ignore */ }
+    setHydrated(true);
+  }, [updateMsgs]);
+  useEffect(() => {
+    if (!hydrated) return;
+    const t = setTimeout(() => saveThread(msgs), 400); // debounced — streaming patches msgs per token
+    return () => clearTimeout(t);
+  }, [msgs, hydrated]);
+  const toggleWide = () => {
+    setWide((w) => { try { window.localStorage.setItem(WIDE_KEY, w ? '0' : '1'); } catch { /* ignore */ } return !w; });
+  };
+
   /** Update the action part with this id, wherever it is in the transcript. */
-  const patchAction = useCallback((actionId: string, patch: Partial<Extract<Part, { kind: 'action' }>>) => {
+  const patchAction = useCallback((actionId: string, patch: Partial<ActionPart>) => {
     updateMsgs((cur) => cur.map((m) =>
       m.role === 'assistant'
         ? {
@@ -481,6 +583,16 @@ export function AssistantPanel({ enabled }: { enabled: boolean }) {
           }
         : m,
     ));
+  }, [updateMsgs]);
+
+  /** Insert a part right after the card with this id (e.g. the "nothing was saved" note). */
+  const appendAfterAction = useCallback((actionId: string, part: Part) => {
+    updateMsgs((cur) => cur.map((m) => {
+      if (m.role !== 'assistant') return m;
+      const idx = m.parts.findIndex((p) => p.kind === 'action' && p.action.actionId === actionId);
+      if (idx < 0) return m;
+      return { ...m, parts: [...m.parts.slice(0, idx + 1), part, ...m.parts.slice(idx + 1)] };
+    }));
   }, [updateMsgs]);
 
   const navigate = useCallback((path: string, newTab = false) => {
@@ -495,20 +607,10 @@ export function AssistantPanel({ enabled }: { enabled: boolean }) {
     setMicStop((n) => n + 1); // stop any live voice dictation on send
     setInput('');
     setBusy(true);
+    setReview(null);
 
-    // A new message supersedes any proposal still on the table.
-    for (const m of msgsRef.current) {
-      if (m.role !== 'assistant') continue;
-      for (const p of m.parts) {
-        if (p.kind === 'action' && p.phase === 'pending') {
-          patchAction(p.action.actionId, { phase: 'cancelled' });
-          fetch('/api/assistant/action', {
-            method: 'POST', headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ actionId: p.action.actionId, decision: 'cancel' }),
-          }).catch(() => {});
-        }
-      }
-    }
+    // A pending card stays on screen while the user asks about it — the server
+    // supersedes it only when a NEW proposal is staged (handled on 'action').
 
     const historyBase = msgsRef.current;
     updateMsgs((cur) => [...cur, {
@@ -546,9 +648,7 @@ export function AssistantPanel({ enabled }: { enabled: boolean }) {
 
       if (res.headers.get('content-type')?.includes('application/json')) {
         const j = await res.json();
-        const note = j.disabled
-          ? 'AI is not configured yet. Add ANTHROPIC_API_KEY or GEMINI_API_KEY to the server environment and restart to enable the assistant.'
-          : (j.error ?? 'Something went wrong.');
+        const note = j.disabled ? AI_OFF : (j.error ?? 'Something went wrong on our side — please try again.');
         patch(() => [{ kind: 'text', text: note }]);
         return;
       }
@@ -616,11 +716,16 @@ export function AssistantPanel({ enabled }: { enabled: boolean }) {
       abortRef.current = null;
       setBusy(false);
     }
-  }, [navigate, patchAction, updateMsgs]);
+  }, [navigate, updateMsgs]);
 
   /** Confirm/cancel a staged action; on confirm, execute + let the model continue. */
   const decide = useCallback(async (actionId: string, decision: 'confirm' | 'cancel', edited?: Record<string, unknown>) => {
+    setReview(null);
     patchAction(actionId, { phase: decision === 'confirm' ? 'executing' : 'cancelled' });
+    if (decision === 'cancel') {
+      // Tell them plainly, right under the card — no server round-trip needed for the words.
+      appendAfterAction(actionId, { kind: 'text', text: 'Okay — nothing was saved. Tell me what to change, or ask something else.' });
+    }
     try {
       const res = await fetch('/api/assistant/action', {
         method: 'POST',
@@ -628,25 +733,27 @@ export function AssistantPanel({ enabled }: { enabled: boolean }) {
         body: JSON.stringify({ actionId, decision, ...(edited ? { edited } : {}) }),
       });
       if (decision === 'cancel') return;
-      const j = await res.json() as { ok?: boolean; message?: string; error?: string; path?: string; entity?: { type: string; id: string } };
+      const j = await res.json() as {
+        ok?: boolean; message?: string; error?: string; path?: string; printPath?: string; entity?: { type: string; id: string };
+      };
       if (j.ok) {
-        patchAction(actionId, { phase: 'executed', result: j.message, path: j.path });
+        patchAction(actionId, { phase: 'executed', result: j.message, path: j.path, printPath: j.printPath, entityType: j.entity?.type });
         router.refresh();
         void send(
-          `[app note — not typed by the user] Confirmed and executed: ${j.message}${j.entity ? ` (${j.entity.type} id: ${j.entity.id})` : ''}. ` +
+          `[app note — not typed by the user] Saved: ${j.message}${j.entity ? ` (${j.entity.type} ${j.entity.id} — internal id, never show it to the user)` : ''}. ` +
           'Acknowledge in one short line; if a further step was agreed, continue with it now.',
           { hidden: true },
         );
       } else {
-        patchAction(actionId, { phase: 'failed', result: j.error ?? 'The action failed.' });
-        void send(`[app note — not typed by the user] The confirmed action FAILED: ${j.error ?? 'unknown error'}. Tell the user briefly and suggest what to do.`, { hidden: true });
+        patchAction(actionId, { phase: 'failed', result: j.error ?? 'Couldn’t save that — please try again.' });
+        void send(`[app note — not typed by the user] Saving FAILED: ${j.error ?? 'unknown error'}. Tell the user in one plain sentence and suggest what to do next.`, { hidden: true });
       }
     } catch {
       if (decision === 'confirm') {
-        patchAction(actionId, { phase: 'failed', result: 'Network problem — the action did not run. Try again.' });
+        patchAction(actionId, { phase: 'failed', result: 'Couldn’t reach the server — nothing was saved. Check your connection and tap Yes again.' });
       }
     }
-  }, [patchAction, router, send]);
+  }, [appendAfterAction, patchAction, router, send]);
 
   /** Validate + read picked files into base64, enforcing type/size/count caps. */
   const onPickFiles = useCallback(async (fileList: FileList | null) => {
@@ -670,86 +777,134 @@ export function AssistantPanel({ enabled }: { enabled: boolean }) {
     if (err) setAttachErr(err);
   }, [files]);
 
-  // Global open events + ⌘K / Ctrl+K + Esc
+  /** Put a template in the box (stripping the "✎ " marker) and let the user finish it. */
+  const fillInput = useCallback((text: string) => {
+    setInput(text.replace(/^✎\s*/, ''));
+    setTimeout(() => {
+      const el = inputRef.current;
+      if (!el) return;
+      el.focus();
+      // Park the caret on the first [blank] so the user can type straight over it.
+      const at = el.value.indexOf('[');
+      if (at >= 0) el.setSelectionRange(at, el.value.indexOf(']', at) + 1 || at + 1);
+    }, 150);
+  }, []);
+
+  // Global open events + ⌘K / Ctrl+K + Esc. While the line editor is open it
+  // owns Escape (it asks before discarding edits); otherwise Esc closes the panel.
   useEffect(() => {
     const onEvent = (e: Event) => {
-      const q = (e as CustomEvent<{ question?: string }>).detail?.question;
+      const d = (e as CustomEvent<{ question?: string; fill?: boolean }>).detail;
       setOpen(true);
-      if (q) setTimeout(() => send(q), 60);
+      if (!d?.question) return;
+      if (d.fill) fillInput(d.question);
+      else setTimeout(() => send(d.question!), 60);
     };
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); setOpen((o) => !o); }
-      if (e.key === 'Escape') setOpen(false);
+      if (e.key === 'Escape' && !reviewRef.current) setOpen(false);
     };
     window.addEventListener('ms-assistant', onEvent);
     window.addEventListener('keydown', onKey);
     return () => { window.removeEventListener('ms-assistant', onEvent); window.removeEventListener('keydown', onKey); };
-  }, [send]);
+  }, [fillInput, send]);
 
+  // Focus moves into the drawer on open and back to whatever opened it on close.
+  const triggerRef = useRef<HTMLElement | null>(null);
   useEffect(() => {
-    if (open) setTimeout(() => inputRef.current?.focus(), 120);
+    if (open) {
+      triggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      const t = setTimeout(() => inputRef.current?.focus(), 120);
+      return () => clearTimeout(t);
+    }
+    const trigger = triggerRef.current;
+    triggerRef.current = null;
+    if (trigger && document.contains(trigger)) trigger.focus();
   }, [open]);
+
+  // Keep Tab inside the drawer while it is open (the line editor traps its own).
+  const onAsideKeyDown = (e: React.KeyboardEvent<HTMLElement>) => {
+    if (e.key !== 'Tab' || !asideRef.current) return;
+    const focusables = Array.from(asideRef.current.querySelectorAll<HTMLElement>(
+      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    )).filter((el) => el.offsetParent !== null);
+    if (!focusables.length) return;
+    const first = focusables[0]!, last = focusables[focusables.length - 1]!;
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  };
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [msgs]);
 
   const stop = () => abortRef.current?.abort();
+  const clearThread = () => { stop(); updateMsgs(() => []); setFiles([]); setAttachErr(null); setReview(null); };
+
+  // The action currently open in the full-width editor (must still be pending).
+  const reviewPart = review
+    ? msgs.flatMap((m) => (m.role === 'assistant' ? m.parts : []))
+        .find((p): p is ActionPart => p.kind === 'action' && p.action.actionId === review && p.phase === 'pending')
+    : undefined;
 
   return (
     <>
       {open && <div className="fixed inset-0 bg-ink/25 z-40" onClick={() => setOpen(false)} aria-hidden />}
       <aside
-        className={`fixed top-0 right-0 h-full w-full sm:w-[440px] bg-bg border-l border-line z-50 flex flex-col shadow-2xl
-          transition-transform duration-200 ${open ? 'translate-x-0' : 'translate-x-full'}`}
-        aria-label="AI assistant"
+        ref={asideRef}
+        onKeyDown={onAsideKeyDown}
+        className={`fixed top-0 right-0 h-full w-full ${wide ? 'sm:w-[min(880px,100vw)]' : 'sm:w-[440px]'} bg-bg border-l border-line z-50 ${rendered ? 'flex' : 'hidden'} flex-col shadow-2xl
+          transition-[transform,width] duration-200 ${shown ? 'translate-x-0' : 'translate-x-full'}`}
+        role="dialog"
+        aria-label="Ask AI"
         aria-hidden={!open}
+        inert={!open || undefined}
       >
-        <header className="flex items-center gap-2.5 px-4 h-[52px] border-b border-line bg-surface shrink-0">
+        <header className="flex items-center gap-2.5 px-4 min-h-[52px] border-b border-line bg-surface shrink-0">
           <span className="text-accent" aria-hidden>✦</span>
           <div className="flex-1 min-w-0">
-            <div className="font-semibold text-sm leading-tight">Assistant</div>
-            <div className="text-[0.65rem] text-faint leading-tight">Ask &amp; act on your ERP · English / हिन्दी</div>
+            <div className="font-semibold text-sm leading-tight flex items-center gap-2">Ask AI <ShortcutKbd /></div>
+            <div className="text-xs text-muted leading-tight">Questions or work · English / हिन्दी</div>
           </div>
           {msgs.length > 0 && (
-            <button onClick={() => { stop(); updateMsgs(() => []); setFiles([]); setAttachErr(null); }} className="text-xs text-steel hover:underline" disabled={busy}>
-              Clear
+            <button onClick={clearThread} className="text-xs text-steel hover:underline min-h-11 px-1" disabled={busy}>
+              New chat
             </button>
           )}
-          <button onClick={() => setOpen(false)} className="text-muted hover:text-ink px-1" aria-label="Close assistant">✕</button>
+          <button onClick={toggleWide} className={`hidden sm:inline-flex ${HIT} text-muted hover:text-ink`}
+            aria-label={wide ? 'Make the panel narrower' : 'Make the panel wider'} title={wide ? 'Make the panel narrower' : 'Make the panel wider'}>
+            {wide ? '⇥' : '⇤'}
+          </button>
+          <button onClick={() => setOpen(false)} className={`${HIT} text-muted hover:text-ink -mr-2`} aria-label="Close Ask AI" title="Close">✕</button>
         </header>
 
-        <div ref={scrollRef} className="flex-1 overflow-y-auto scroll-thin p-4 space-y-4">
+        <div ref={scrollRef} className="flex-1 overflow-y-auto scroll-thin p-4 space-y-4" aria-live="polite">
           {msgs.length === 0 && (
             <div className="pt-6">
               {!enabled && (
                 <div className="card p-4 mb-4 text-sm">
-                  <div className="font-medium text-ink mb-1">AI is not configured</div>
-                  <p className="text-muted">
-                    Set <code className="font-mono text-xs bg-surface-2 px-1 rounded">ANTHROPIC_API_KEY</code> or{' '}
-                    <code className="font-mono text-xs bg-surface-2 px-1 rounded">GEMINI_API_KEY</code> in the
-                    server environment and restart the app. Everything else in the ERP works without it.
-                  </p>
+                  <div className="font-medium text-ink mb-1">AI assistant is off</div>
+                  <p className="text-muted">{AI_OFF}</p>
                 </div>
               )}
-              <p className="eyebrow mb-2">Try asking</p>
+              <p className="text-xs text-muted mb-2">Try asking — or tap a ✎ example and fill in the blanks</p>
               <div className="flex flex-col gap-1.5">
                 {suggestionsFor(pathname).map((s) => (
                   <button
-                    key={s}
-                    onClick={() => send(s)}
+                    key={s.text}
+                    onClick={() => (s.fill ? fillInput(s.text) : send(s.text))}
                     disabled={busy || !enabled}
-                    className="text-left text-sm px-3 py-2 rounded-lg border border-line bg-surface hover:border-accent/50 hover:bg-accent-soft/40 transition-colors disabled:opacity-50"
+                    className="text-left text-sm px-3 py-2.5 min-h-11 rounded-lg border border-line bg-surface hover:border-accent/50 hover:bg-accent-soft/40 transition-colors disabled:opacity-50"
                   >
-                    {s}
+                    {s.text}
                   </button>
                 ))}
               </div>
-              <p className="text-[0.68rem] text-faint mt-4 leading-relaxed">
-                The assistant reads your live ERP data and can create leads, customers, quotations and invoices,
-                move statuses and open screens — every change is shown to you first and runs only after you confirm.
-                It can make mistakes; review before confirming.
-              </p>
+              <div className="mt-4 text-xs text-muted leading-relaxed space-y-1">
+                <div>• Make a quotation, bill or order — type it, or attach a photo of a PO / price list.</div>
+                <div>• Change a document: ‘line 3 ka rate 32,000 karo’.</div>
+                <div>• Nothing is saved until you tap <b className="text-ink">Yes</b> on the card.</div>
+              </div>
             </div>
           )}
 
@@ -786,7 +941,12 @@ export function AssistantPanel({ enabled }: { enabled: boolean }) {
                   }
                   if (p.kind === 'table') return <TablePart key={j} title={p.title} columns={p.columns} rows={p.rows} />;
                   if (p.kind === 'chart') return <ChartPart key={j} spec={p.spec} />;
-                  if (p.kind === 'action') return <ActionCard key={j} part={p} busy={busy} onDecide={decide} onOpen={(path) => navigate(path)} />;
+                  if (p.kind === 'action') {
+                    return (
+                      <ActionCard key={p.action.actionId} part={p} busy={busy} onDecide={decide}
+                        onOpen={(path) => navigate(path)} onReview={(id) => setReview(id)} />
+                    );
+                  }
                   return p.newTab ? (
                     <a key={j} href={p.path} target="_blank" rel="noopener noreferrer"
                       className="inline-flex items-center gap-2 text-xs font-medium text-accent bg-accent-soft/50 border border-accent/40 rounded-full px-3 py-1 hover:bg-accent-soft transition-colors">
@@ -824,12 +984,13 @@ export function AssistantPanel({ enabled }: { enabled: boolean }) {
                     <span key={i} className="inline-flex items-center gap-1.5 max-w-[12rem] text-xs bg-surface-2 border border-line rounded-full pl-2 pr-1 py-1">
                       <span aria-hidden>{isImageMime(f.mimeType) ? '🖼' : '📄'}</span>
                       <span className="truncate text-muted" title={f.name}>{f.name}</span>
-                      <button type="button" onClick={() => setFiles((cur) => cur.filter((_, x) => x !== i))} aria-label={`Remove ${f.name}`} className="text-faint hover:text-crit px-0.5">✕</button>
+                      <button type="button" onClick={() => setFiles((cur) => cur.filter((_, x) => x !== i))} aria-label={`Remove ${f.name}`}
+                        className={`${HIT} -my-2 text-muted hover:text-crit`}>✕</button>
                     </span>
                   ))}
                 </div>
               )}
-              {attachErr && <div className="text-[0.7rem] text-crit">{attachErr}</div>}
+              {attachErr && <div className="text-xs text-crit" role="alert">{attachErr}</div>}
             </div>
           )}
           <div className="flex gap-2">
@@ -847,9 +1008,9 @@ export function AssistantPanel({ enabled }: { enabled: boolean }) {
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
                   disabled={busy || files.length >= MAX_FILES}
-                  className="btn-ghost shrink-0 !px-3 disabled:opacity-50"
-                  aria-label="Attach a document or photo"
-                  title="Attach a document or photo (PDF or image)"
+                  className={`btn-ghost shrink-0 !px-3 ${HIT} disabled:opacity-50`}
+                  aria-label="Attach a photo or PDF"
+                  title="Attach a photo or PDF (PO, visiting card, price list)"
                 >
                   📎
                 </button>
@@ -859,10 +1020,10 @@ export function AssistantPanel({ enabled }: { enabled: boolean }) {
               ref={inputRef}
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder={enabled ? 'Ask, attach a doc, or tell me what to do…' : 'AI not configured'}
+              placeholder={enabled ? 'Ask a question, or tell me what to do…' : 'The AI assistant is switched off'}
               disabled={!enabled || busy}
               className="field flex-1"
-              aria-label="Ask the assistant"
+              aria-label="Ask a question, or tell me what to do"
             />
             {enabled && (
               <MicButton
@@ -876,11 +1037,29 @@ export function AssistantPanel({ enabled }: { enabled: boolean }) {
             {busy ? (
               <button type="button" onClick={stop} className="btn-ghost shrink-0" aria-label="Stop">■ Stop</button>
             ) : (
-              <button type="submit" disabled={!enabled || (!input.trim() && files.length === 0)} className="btn-primary shrink-0 disabled:opacity-50">Ask</button>
+              <button type="submit" disabled={!enabled || (!input.trim() && files.length === 0)} className="btn-primary shrink-0 disabled:opacity-50">Send</button>
             )}
           </div>
+          {enabled && msgs.length === 0 && (
+            <div className="mt-2 text-xs text-muted">📎 Photo of a PO / visiting card · 🎤 Speak in हिन्दी or English</div>
+          )}
         </form>
       </aside>
+
+      {reviewPart && reviewPart.action.doc && reviewPart.action.editItems && (
+        <DocumentReviewModal
+          key={reviewPart.action.actionId}
+          title={reviewPart.action.title}
+          doc={reviewPart.action.doc}
+          fields={reviewPart.action.editable ?? []}
+          payload={reviewPart.action.payload ?? {}}
+          items={reviewPart.action.editItems}
+          warning={reviewPart.action.warning}
+          busy={busy}
+          onConfirm={(edited) => decide(reviewPart.action.actionId, 'confirm', edited)}
+          onClose={() => setReview(null)}
+        />
+      )}
     </>
   );
 }

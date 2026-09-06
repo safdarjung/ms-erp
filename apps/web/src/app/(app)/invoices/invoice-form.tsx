@@ -1,16 +1,21 @@
 'use client';
-import { useActionState, useMemo, useState, type FormEvent } from 'react';
-import { computeGst, isInterstate, formatINR, type ColumnDef } from '@ms/core';
-import { SubmitButton } from '@/components/submit-button';
+import { useActionState, useEffect, useMemo, useRef, useState, type Dispatch, type FormEvent, type SetStateAction } from 'react';
+import { usePathname } from 'next/navigation';
+import { computeGst, isInterstate, type ColumnDef } from '@ms/core';
 import { AiPolishButton } from '@/components/ai-polish-button';
-import { LineItemsEditor, emptyRow, serializeItems, cleanColumns, itemIssues, type LineRow } from '@/components/line-items-editor';
+import {
+  LineItemsEditor, emptyRow, serializeItems, cleanColumns, itemIssues, itemWarnings, focusIssue, type LineRow,
+} from '@/components/line-items-editor';
 import { useFormDraft } from '@/components/use-form-draft';
+import {
+  CustomerSelect, DraftBanner, TotalsCard, IssuesBox, WarningsBox, ServerError, TermsField, SaveBar,
+} from '@/components/document-form-parts';
 import { createInvoiceAction, updateInvoiceAction, type ActionState } from './actions';
 
 type Cust = { id: string; name: string; stateCode: string | null; gstin: string | null };
 
 export type InvoiceInitial = {
-  customerId: string; docDate: string; poRef: string; terms: string; rows: LineRow[]; columnDefs?: ColumnDef[];
+  customerId: string; docDate: string; poRef: string; terms: string; notes?: string; rows: LineRow[]; columnDefs?: ColumnDef[];
 };
 
 export function InvoiceForm({
@@ -32,44 +37,68 @@ export function InvoiceForm({
   invoiceId?: string;
   initial?: InvoiceInitial;
 }) {
+  const pathname = usePathname();
   const [state, action] = useActionState<ActionState, FormData>(mode === 'edit' ? updateInvoiceAction : createInvoiceAction, {});
   const [customerId, setCustomerId] = useState(initial?.customerId ?? defaultCustomerId);
-  const [rows, setRows] = useState<LineRow[]>(initial?.rows?.length ? initial.rows : [emptyRow()]);
-  const [columns, setColumns] = useState<ColumnDef[]>(initial?.columnDefs ?? []);
+  const [rows, setRowsRaw] = useState<LineRow[]>(initial?.rows?.length ? initial.rows : [emptyRow(undefined, 'r-first')]);
+  const [columns, setColumnsRaw] = useState<ColumnDef[]>(initial?.columnDefs ?? []);
   const [terms, setTerms] = useState(initial?.terms ?? defaultTerms);
+  const [notes, setNotes] = useState(initial?.notes ?? '');
+  const [touched, setTouched] = useState(false);
+  const [submitAttempted, setSubmitAttempted] = useState(false);
+  const [warnAck, setWarnAck] = useState(false);
+  const warnRef = useRef<HTMLDivElement>(null);
   const today = new Date().toISOString().slice(0, 10);
+
+  const setRows: Dispatch<SetStateAction<LineRow[]>> = (u) => { setTouched(true); setWarnAck(false); setRowsRaw(u); };
+  const setColumns: Dispatch<SetStateAction<ColumnDef[]>> = (u) => { setTouched(true); setColumnsRaw(u); };
 
   const cust = customers.find((c) => c.id === customerId);
   const interstate = isInterstate(supplierStateCode, cust?.stateCode);
   const items = useMemo(() => serializeItems(rows, columns), [rows, columns]);
   const totals = useMemo(() => computeGst(items, interstate), [items, interstate]);
   const cleanCols = useMemo(() => cleanColumns(columns), [columns]);
-  const issues = useMemo(() => itemIssues(rows), [rows]);
+  const issues = useMemo(() => itemIssues(rows, columns), [rows, columns]);
+  const warnings = useMemo(() => itemWarnings(rows), [rows]);
+  const showIssues = touched || submitAttempted;
   const savable = items.length;
 
+  // Draft safety-net — not cleared on submit; the detail page clears it once the save is confirmed.
   const draftKey = mode === 'edit' && invoiceId ? `invoice:${invoiceId}` : 'invoice:new';
-  const draftSnapshot = useMemo(() => ({ customerId, rows, columns, terms }), [customerId, rows, columns, terms]);
-  const { draft, clear: clearDraft } = useFormDraft(draftKey, draftSnapshot);
+  const draftSnapshot = useMemo(
+    () => ({ customerId, customerName: cust?.name ?? null, rows, columns, terms, notes }),
+    [customerId, cust?.name, rows, columns, terms, notes],
+  );
+  const { draft, savedAt, save: saveDraft, clear: clearDraft } = useFormDraft(draftKey, draftSnapshot);
   const [draftDismissed, setDraftDismissed] = useState(false);
   const showRestore = !draftDismissed && !!draft
     && ((draft.rows?.some((r) => r.description?.trim()) ?? false) || (draft.columns?.length ?? 0) > 0);
   const restoreDraft = () => {
     if (!draft) return;
     setCustomerId(draft.customerId ?? '');
-    setRows(draft.rows?.length ? draft.rows : [emptyRow()]);
-    setColumns(draft.columns ?? []);
+    setRowsRaw(draft.rows?.length ? draft.rows : [emptyRow()]);
+    setColumnsRaw(draft.columns ?? []);
     setTerms(draft.terms ?? '');
+    setNotes(draft.notes ?? '');
     setDraftDismissed(true);
   };
   const discardDraft = () => { clearDraft(); setDraftDismissed(true); };
+  useEffect(() => { if (state.error) saveDraft(); }, [state.error, saveDraft]);
 
   const itemsJson = JSON.stringify(items);
   const columnDefsJson = JSON.stringify(cleanCols);
 
   const onSubmit = (e: FormEvent<HTMLFormElement>) => {
-    if (issues.length) { e.preventDefault(); return; }
-    clearDraft();
+    setSubmitAttempted(true);
+    if (issues.length) { e.preventDefault(); focusIssue(issues[0]!); return; }
+    if (warnings.length && !warnAck) {
+      e.preventDefault();
+      setWarnAck(true);
+      setTimeout(() => warnRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' }), 0);
+    }
   };
+
+  const saveLabel = warnings.length && warnAck ? 'Save anyway' : mode === 'edit' ? 'Save changes' : 'Save bill';
 
   return (
     <form action={action} onSubmit={onSubmit} className="flex flex-col gap-5">
@@ -77,84 +106,55 @@ export function InvoiceForm({
       <input type="hidden" name="columnDefs" value={columnDefsJson} />
       {mode === 'edit' && <input type="hidden" name="id" value={invoiceId} />}
 
-      {showRestore && (
-        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-accent/40 bg-accent-soft/30 px-4 py-2.5 text-sm">
-          <span aria-hidden>💾</span>
-          <span className="flex-1 min-w-0">You have an unsaved draft of this invoice from earlier.</span>
-          <button type="button" onClick={restoreDraft} className="btn-primary text-xs !py-1">Restore it</button>
-          <button type="button" onClick={discardDraft} className="text-muted text-xs hover:underline">Discard</button>
-        </div>
+      {showRestore && draft && (
+        <DraftBanner
+          doc="bill" customerName={draft.customerName} savedAt={savedAt}
+          mismatch={mode === 'create' && !!defaultCustomerId && !!draft.customerId && draft.customerId !== defaultCustomerId}
+          onContinue={restoreDraft} onFresh={discardDraft}
+        />
       )}
 
       <div className="card p-4 grid grid-cols-2 md:grid-cols-4 gap-3">
         {mode === 'edit' ? (
           <div className="col-span-2">
-            <label className="label">Customer</label>
+            <span className="label">Customer</span>
             <input type="hidden" name="customerId" value={customerId} />
             <div className="field bg-surface-2 text-muted">{cust?.name ?? '—'}</div>
           </div>
         ) : (
-          <div className="col-span-2">
-            <label className="label">Customer *</label>
-            <select name="customerId" required value={customerId} onChange={(e) => setCustomerId(e.target.value)} className="field">
-              <option value="">Select customer…</option>
-              {customers.map((c) => (
-                <option key={c.id} value={c.id}>{c.name}{c.stateCode ? ` — state ${c.stateCode}` : ''}</option>
-              ))}
-            </select>
-          </div>
+          <CustomerSelect customers={customers} value={customerId} onChange={setCustomerId} returnTo={pathname} />
         )}
-        <div><label className="label">Date *</label><input name="docDate" type="date" defaultValue={initial?.docDate ?? today} required className="field" /></div>
-        <div><label className="label">PO ref</label><input name="poRef" defaultValue={initial?.poRef ?? ''} className="field" placeholder="optional" /></div>
+        <div>
+          <label htmlFor="docDate" className="label">Date *</label>
+          <input id="docDate" name="docDate" type="date" defaultValue={initial?.docDate ?? today} required className="field" />
+        </div>
+        <div>
+          <label htmlFor="poRef" className="label">Customer PO no.</label>
+          <input id="poRef" name="poRef" defaultValue={initial?.poRef ?? ''} className="field" placeholder="e.g. PO/2026/118 (optional)" maxLength={40} />
+        </div>
       </div>
 
-      <LineItemsEditor rows={rows} setRows={setRows} columns={columns} setColumns={setColumns} />
+      <LineItemsEditor rows={rows} setRows={setRows} columns={columns} setColumns={setColumns} showIssues={showIssues} />
 
       <div className="flex flex-col md:flex-row gap-5">
-        <div className="flex-1">
-          <label className="label">Terms</label>
-          <textarea name="terms" rows={6} value={terms} onChange={(e) => setTerms(e.target.value)} className="field" />
-          <AiPolishButton
-            kind="terms"
-            docType="invoice"
-            value={terms}
-            onApply={setTerms}
-            enabled={aiEnabled}
-            context={cust ? `Customer: ${cust.name}.` : undefined}
-          />
+        <div className="flex-1 min-w-0">
+          <TermsField value={terms} defaultTerms={defaultTerms} onChange={setTerms}>
+            <AiPolishButton kind="terms" docType="invoice" value={terms} onApply={setTerms} enabled={aiEnabled}
+              context={cust ? `Customer: ${cust.name}.` : undefined} />
+          </TermsField>
+          <div className="mt-4">
+            <label htmlFor="notes" className="label">Notes <span className="font-normal text-muted">(optional — printed on the bill)</span></label>
+            <textarea id="notes" name="notes" rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} className="field" placeholder="e.g. Goods dispatched via Safexpress, LR no. 4471." />
+            <AiPolishButton kind="notes" docType="invoice" value={notes} onApply={setNotes} enabled={aiEnabled} context={cust ? `Customer: ${cust.name}.` : undefined} />
+          </div>
         </div>
-        <div className="card p-4 w-full md:w-72 text-sm self-start">
-          <div className="flex justify-between py-1"><span className="text-muted">Taxable</span><span className="tabular-nums font-mono">{formatINR(totals.subtotal)}</span></div>
-          {interstate ? (
-            <div className="flex justify-between py-1"><span className="text-muted">IGST</span><span className="tabular-nums font-mono">{formatINR(totals.igst)}</span></div>
-          ) : (
-            <>
-              <div className="flex justify-between py-1"><span className="text-muted">CGST</span><span className="tabular-nums font-mono">{formatINR(totals.cgst)}</span></div>
-              <div className="flex justify-between py-1"><span className="text-muted">SGST</span><span className="tabular-nums font-mono">{formatINR(totals.sgst)}</span></div>
-            </>
-          )}
-          <div className="flex justify-between py-2 mt-1 border-t border-line font-semibold"><span>G. Total</span><span className="tabular-nums font-mono">{formatINR(totals.grand)}</span></div>
-          <div className="text-xs text-faint mt-1">{cust ? (interstate ? 'Inter-state → IGST' : 'Intra-state → CGST + SGST') : 'Select a customer'}</div>
-        </div>
+        <TotalsCard totals={totals} gstRates={items.map((i) => i.gstRate)} interstate={interstate} hasCustomer={!!cust} supplierStateCode={supplierStateCode} />
       </div>
 
-      {issues.length > 0 && (
-        <div className="rounded-lg border border-crit/40 bg-[#f6e5e1]/40 px-4 py-2.5 text-sm">
-          <div className="font-medium text-crit mb-1">Fix {issues.length === 1 ? 'this' : 'these'} before saving:</div>
-          <ul className="list-disc pl-5 text-crit/90 space-y-0.5">
-            {issues.map((iss, i) => <li key={i}>{iss.message}</li>)}
-          </ul>
-        </div>
-      )}
-      {state.error && (
-        <div className="rounded-lg border border-crit/50 bg-[#f6e5e1]/60 px-4 py-2.5 text-sm text-crit">
-          <b>Couldn’t save:</b> {state.error} <span className="text-crit/70">— your entries are still here; fix and try again.</span>
-        </div>
-      )}
-      <div className="flex items-center gap-3">
-        <SubmitButton className="btn-primary" disabled={issues.length > 0}>{mode === 'edit' ? 'Save changes' : 'Create invoice'}</SubmitButton>
-        <span className="text-xs text-faint">{savable} line{savable === 1 ? '' : 's'} will be saved</span>
-      </div>
+      {showIssues && <IssuesBox issues={issues} />}
+      {showIssues && <div ref={warnRef}><WarningsBox warnings={warnings} acknowledged={warnAck} /></div>}
+      <ServerError message={state.error} />
+      <SaveBar total={totals.grand} label={saveLabel} hint={`${savable} ${savable === 1 ? 'item' : 'items'} will be saved`} />
     </form>
   );
 }

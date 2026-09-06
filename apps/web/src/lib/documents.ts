@@ -1,6 +1,6 @@
 import 'server-only';
 import {
-  computeGst, isInterstate, parseLetterhead,
+  computeGst, formatINR, isInterstate, parseLetterhead,
   type InvoiceInput, type QuotationInput, type OrderInput, type PaymentInput, type LeadStage, type ColumnDef,
 } from '@ms/core';
 import {
@@ -62,7 +62,7 @@ export async function insertQuotationTx(
   tx: Tx, u: U, d: QuotationInput,
 ): Promise<{ id: string; number: string; grand: number }> {
   const [cust] = await tx.select().from(customer).where(eq(customer.id, d.customerId)).limit(1);
-  if (!cust) throw new Error('Customer not found');
+  if (!cust) throw new Error('Customer not found — pick another customer from the list.');
   const interstate = isInterstate(await getSupplierStateCode(tx), cust.stateCode);
   const totals = computeGst(d.items, interstate);
   const when = new Date(d.docDate);
@@ -80,7 +80,7 @@ export async function insertQuotationTx(
     tenantId: u.tenantId, quotationId: q!.id, seq: i + 1, description: it.description, hsn: it.hsn,
     qty: String(it.qty), uom: it.uom, rate: String(it.rate), gstRate: String(it.gstRate),
     taxableValue: String(r2(it.qty * it.rate)), isToolingCharge: it.isToolingCharge ?? false,
-    groupLabel: it.groupLabel ?? null, attributes: it.attributes ?? {},
+    groupLabel: it.groupLabel ?? null, groupNote: it.groupNote ?? null, attributes: it.attributes ?? {},
   })));
 
   return { id: q!.id, number, grand: totals.grand };
@@ -90,7 +90,7 @@ export async function insertInvoiceTx(
   tx: Tx, u: U, d: InvoiceInput,
 ): Promise<{ id: string; number: string; grand: number }> {
   const [cust] = await tx.select().from(customer).where(eq(customer.id, d.customerId)).limit(1);
-  if (!cust) throw new Error('Customer not found');
+  if (!cust) throw new Error('Customer not found — pick another customer from the list.');
   const interstate = isInterstate(await getSupplierStateCode(tx), cust.stateCode);
   const totals = computeGst(d.items, interstate);
   const when = new Date(d.docDate);
@@ -102,7 +102,7 @@ export async function insertInvoiceTx(
     placeOfSupply: cust.stateCode, isInterstate: interstate,
     subtotal: String(totals.subtotal), cgst: String(totals.cgst), sgst: String(totals.sgst),
     igst: String(totals.igst), grandTotal: String(totals.grand),
-    terms: d.terms, status: 'issued', columnDefs: d.columnDefs ?? [], createdBy: u.userId,
+    terms: d.terms, notes: d.notes, status: 'issued', columnDefs: d.columnDefs ?? [], createdBy: u.userId,
   }).returning({ id: taxInvoice.id });
 
   await tx.insert(taxInvoiceItem).values(d.items.map((it, i) => ({
@@ -110,7 +110,7 @@ export async function insertInvoiceTx(
     description: it.description, hsn: it.hsn, qty: String(it.qty), uom: it.uom,
     rate: String(it.rate), gstRate: String(it.gstRate),
     taxableValue: String(r2(it.qty * it.rate)),
-    groupLabel: it.groupLabel ?? null, attributes: it.attributes ?? {},
+    groupLabel: it.groupLabel ?? null, groupNote: it.groupNote ?? null, attributes: it.attributes ?? {},
   })));
 
   return { id: inv!.id, number, grand: totals.grand };
@@ -122,13 +122,13 @@ export type DocEdit = {
   poRef?: string;
   terms?: string;
   notes?: string;
-  /** When present, REPLACES this doc's custom column definitions. */
+  /** When present, REPLACES this doc's extra-field definitions. */
   columnDefs?: ColumnDef[];
   /** When present, REPLACES all line items; totals recompute deterministically. */
   items?: {
     description: string; hsn?: string; qty: number; uom: string;
     rate: number; gstRate: number; isToolingCharge?: boolean;
-    groupLabel?: string; attributes?: Record<string, string>;
+    groupLabel?: string; groupNote?: string; attributes?: Record<string, string>;
   }[];
 };
 
@@ -137,8 +137,8 @@ export async function updateQuotationTx(
   tx: Tx, u: U, id: string, d: DocEdit,
 ): Promise<{ number: string; grand: number }> {
   const [q] = await tx.select().from(quotation).where(eq(quotation.id, id)).limit(1);
-  if (!q) throw new Error('Quotation not found');
-  if (q.convertedInvoiceId) throw new Error(`${q.number} is converted to an invoice and locked.`);
+  if (!q) throw new Error('Quotation not found — it may have been deleted. Refresh and try again.');
+  if (q.convertedInvoiceId) throw new Error(`${q.number} already has a bill and can't be changed.`);
 
   const set: Record<string, unknown> = { updatedAt: new Date() };
   if (d.docDate !== undefined) set.docDate = new Date(d.docDate);
@@ -162,7 +162,7 @@ export async function updateQuotationTx(
       tenantId: u.tenantId, quotationId: id, seq: i + 1, description: it.description, hsn: it.hsn,
       qty: String(it.qty), uom: it.uom, rate: String(it.rate), gstRate: String(it.gstRate),
       taxableValue: String(r2(it.qty * it.rate)), isToolingCharge: it.isToolingCharge ?? false,
-      groupLabel: it.groupLabel ?? null, attributes: it.attributes ?? {},
+      groupLabel: it.groupLabel ?? null, groupNote: it.groupNote ?? null, attributes: it.attributes ?? {},
     })));
   }
   await tx.update(quotation).set(set).where(eq(quotation.id, id));
@@ -174,8 +174,8 @@ export async function updateInvoiceTx(
   tx: Tx, u: U, id: string, d: DocEdit,
 ): Promise<{ number: string; grand: number }> {
   const [inv] = await tx.select().from(taxInvoice).where(eq(taxInvoice.id, id)).limit(1);
-  if (!inv) throw new Error('Invoice not found');
-  if (inv.status === 'cancelled') throw new Error(`${inv.number} is cancelled and locked.`);
+  if (!inv) throw new Error('Bill not found — it may have been deleted. Refresh and try again.');
+  if (inv.status === 'cancelled') throw new Error(`${inv.number} is cancelled and can't be changed.`);
 
   const set: Record<string, unknown> = { updatedAt: new Date() };
   if (d.docDate !== undefined) set.docDate = new Date(d.docDate);
@@ -198,7 +198,7 @@ export async function updateInvoiceTx(
       tenantId: u.tenantId, invoiceId: id, seq: i + 1, description: it.description, hsn: it.hsn,
       qty: String(it.qty), uom: it.uom, rate: String(it.rate), gstRate: String(it.gstRate),
       taxableValue: String(r2(it.qty * it.rate)),
-      groupLabel: it.groupLabel ?? null, attributes: it.attributes ?? {},
+      groupLabel: it.groupLabel ?? null, groupNote: it.groupNote ?? null, attributes: it.attributes ?? {},
     })));
   }
   await tx.update(taxInvoice).set(set).where(eq(taxInvoice.id, id));
@@ -211,7 +211,7 @@ export async function insertOrderTx(
   tx: Tx, u: U, d: OrderInput,
 ): Promise<{ id: string; number: string; total: number }> {
   const [cust] = await tx.select().from(customer).where(eq(customer.id, d.customerId)).limit(1);
-  if (!cust) throw new Error('Customer not found');
+  if (!cust) throw new Error('Customer not found — pick another customer from the list.');
   const subtotal = r2(d.items.reduce((s, it) => s + it.qty * it.rate, 0));
   const when = new Date(d.docDate);
   const number = await issueDocNumber(tx, u.tenantId, 'order', when);
@@ -227,7 +227,7 @@ export async function insertOrderTx(
     tenantId: u.tenantId, orderId: o!.id, seq: i + 1, description: it.description, hsn: it.hsn,
     qty: String(it.qty), uom: it.uom, rate: String(it.rate), gstRate: String(it.gstRate),
     taxableValue: String(r2(it.qty * it.rate)),
-    groupLabel: it.groupLabel ?? null, attributes: it.attributes ?? {},
+    groupLabel: it.groupLabel ?? null, groupNote: it.groupNote ?? null, attributes: it.attributes ?? {},
   })));
 
   return { id: o!.id, number, total: subtotal };
@@ -242,7 +242,7 @@ export type OrderEdit = {
   columnDefs?: ColumnDef[];
   items?: {
     description: string; hsn?: string; qty: number; uom: string;
-    rate: number; gstRate: number; groupLabel?: string; attributes?: Record<string, string>;
+    rate: number; gstRate: number; groupLabel?: string; groupNote?: string; attributes?: Record<string, string>;
   }[];
 };
 
@@ -252,9 +252,9 @@ export async function updateOrderTx(
   tx: Tx, u: U, id: string, d: OrderEdit,
 ): Promise<{ number: string; total: number }> {
   const [o] = await tx.select().from(salesOrder).where(eq(salesOrder.id, id)).limit(1);
-  if (!o) throw new Error('Order not found');
-  if (o.convertedInvoiceId) throw new Error(`${o.number} is invoiced and locked.`);
-  if (o.status === 'cancelled') throw new Error(`${o.number} is cancelled and locked.`);
+  if (!o) throw new Error('Order not found — it may have been deleted. Refresh and try again.');
+  if (o.convertedInvoiceId) throw new Error(`${o.number} already has a bill and can't be changed.`);
+  if (o.status === 'cancelled') throw new Error(`${o.number} is cancelled and can't be changed.`);
 
   const set: Record<string, unknown> = { updatedAt: new Date() };
   if (d.docDate !== undefined) set.docDate = new Date(d.docDate);
@@ -273,7 +273,7 @@ export async function updateOrderTx(
       tenantId: u.tenantId, orderId: id, seq: i + 1, description: it.description, hsn: it.hsn,
       qty: String(it.qty), uom: it.uom, rate: String(it.rate), gstRate: String(it.gstRate),
       taxableValue: String(r2(it.qty * it.rate)),
-      groupLabel: it.groupLabel ?? null, attributes: it.attributes ?? {},
+      groupLabel: it.groupLabel ?? null, groupNote: it.groupNote ?? null, attributes: it.attributes ?? {},
     })));
   }
   await tx.update(salesOrder).set(set).where(eq(salesOrder.id, id));
@@ -287,8 +287,8 @@ export async function convertQuotationToOrderTx(
   tx: Tx, u: U, quotationId: string, meta: OrderConvertMeta = {},
 ): Promise<{ orderId: string; number: string; existing: boolean }> {
   const [q] = await tx.select().from(quotation).where(eq(quotation.id, quotationId)).limit(1);
-  if (!q) throw new Error('Quotation not found');
-  if (q.convertedInvoiceId) throw new Error(`${q.number} is already invoiced.`);
+  if (!q) throw new Error('Quotation not found — it may have been deleted. Refresh and try again.');
+  if (q.convertedInvoiceId) throw new Error(`${q.number} already has a bill, so an order can't be made from it.`);
   if (q.convertedOrderId) {
     const [o] = await tx.select({ number: salesOrder.number }).from(salesOrder).where(eq(salesOrder.id, q.convertedOrderId)).limit(1);
     return { orderId: q.convertedOrderId, number: o?.number ?? '', existing: true };
@@ -308,7 +308,7 @@ export async function convertQuotationToOrderTx(
   await tx.insert(orderItem).values(qitems.map((it, i) => ({
     tenantId: u.tenantId, orderId: o!.id, seq: i + 1, description: it.description, hsn: it.hsn,
     qty: it.qty, uom: it.uom, rate: it.rate, gstRate: it.gstRate, taxableValue: it.taxableValue,
-    groupLabel: it.groupLabel, attributes: it.attributes,
+    groupLabel: it.groupLabel, groupNote: it.groupNote, attributes: it.attributes,
   })));
 
   await tx.update(quotation).set({ convertedOrderId: o!.id, updatedAt: new Date() }).where(eq(quotation.id, q.id));
@@ -320,15 +320,15 @@ export async function convertOrderToInvoiceTx(
   tx: Tx, u: U, orderId: string,
 ): Promise<{ invoiceId: string; number: string; existing: boolean }> {
   const [o] = await tx.select().from(salesOrder).where(eq(salesOrder.id, orderId)).limit(1);
-  if (!o) throw new Error('Order not found');
-  if (o.status === 'cancelled') throw new Error(`${o.number} is cancelled.`);
+  if (!o) throw new Error('Order not found — it may have been deleted. Refresh and try again.');
+  if (o.status === 'cancelled') throw new Error(`${o.number} is cancelled, so a bill can't be made from it.`);
   if (o.convertedInvoiceId) {
     const [inv] = await tx.select({ number: taxInvoice.number }).from(taxInvoice).where(eq(taxInvoice.id, o.convertedInvoiceId)).limit(1);
     return { invoiceId: o.convertedInvoiceId, number: inv?.number ?? '', existing: true };
   }
 
   const [cust] = await tx.select().from(customer).where(eq(customer.id, o.customerId)).limit(1);
-  if (!cust) throw new Error('Customer not found');
+  if (!cust) throw new Error('Customer not found — pick another customer from the list.');
   const interstate = isInterstate(await getSupplierStateCode(tx), cust.stateCode);
   const oitems = await tx.select().from(orderItem).where(eq(orderItem.orderId, orderId)).orderBy(orderItem.seq);
   const totals = computeGst(oitems.map((it) => ({ qty: it.qty, rate: it.rate, gstRate: it.gstRate })), interstate);
@@ -347,7 +347,7 @@ export async function convertOrderToInvoiceTx(
   await tx.insert(taxInvoiceItem).values(oitems.map((it, i) => ({
     tenantId: u.tenantId, invoiceId: inv!.id, seq: i + 1, description: it.description, hsn: it.hsn,
     qty: it.qty, uom: it.uom, rate: it.rate, gstRate: it.gstRate, taxableValue: it.taxableValue,
-    groupLabel: it.groupLabel, attributes: it.attributes,
+    groupLabel: it.groupLabel, groupNote: it.groupNote, attributes: it.attributes,
   })));
 
   await tx.update(salesOrder).set({ convertedInvoiceId: inv!.id, updatedAt: new Date() }).where(eq(salesOrder.id, o.id));
@@ -358,13 +358,13 @@ export async function convertOrderToInvoiceTx(
 
 export async function recordPaymentTx(tx: Tx, u: U, d: PaymentInput): Promise<{ amount: number; fullyPaid: boolean }> {
   const [inv] = await tx.select().from(taxInvoice).where(eq(taxInvoice.id, d.invoiceId)).limit(1);
-  if (!inv) throw new Error('Invoice not found');
-  if (inv.status === 'cancelled') throw new Error(`${inv.number} is cancelled — no payments can be recorded.`);
+  if (!inv) throw new Error('Bill not found — it may have been deleted. Refresh and try again.');
+  if (inv.status === 'cancelled') throw new Error(`${inv.number} is cancelled — a payment can't be recorded against it.`);
 
   const [agg] = await tx.select({ received: sum(payment.amount) }).from(payment).where(eq(payment.invoiceId, d.invoiceId));
   const received = Number(agg?.received ?? 0);
   const outstanding = r2(Number(inv.grandTotal) - received);
-  if (d.amount > outstanding + 0.5) throw new Error(`That exceeds the ₹${outstanding.toFixed(2)} still outstanding on ${inv.number}.`);
+  if (d.amount > outstanding + 0.5) throw new Error(`That's more than the ${formatINR(outstanding)} still due on ${inv.number}. Enter up to that amount, or check whether the customer overpaid.`);
 
   await tx.insert(payment).values({
     tenantId: u.tenantId, invoiceId: d.invoiceId, amount: String(d.amount), paidOn: new Date(d.paidOn),
@@ -382,7 +382,7 @@ export async function convertQuotationTx(
   tx: Tx, u: U, quotationId: string,
 ): Promise<{ invoiceId: string; number: string; existing: boolean }> {
   const [q] = await tx.select().from(quotation).where(eq(quotation.id, quotationId)).limit(1);
-  if (!q) throw new Error('Quotation not found');
+  if (!q) throw new Error('Quotation not found — it may have been deleted. Refresh and try again.');
 
   if (q.convertedInvoiceId) {
     const [inv] = await tx.select({ number: taxInvoice.number })
@@ -407,7 +407,7 @@ export async function convertQuotationTx(
   await tx.insert(taxInvoiceItem).values(qitems.map((it, i) => ({
     tenantId: u.tenantId, invoiceId: inv!.id, seq: i + 1, description: it.description, hsn: it.hsn,
     qty: it.qty, uom: it.uom, rate: it.rate, gstRate: it.gstRate, taxableValue: it.taxableValue,
-    groupLabel: it.groupLabel, attributes: it.attributes,
+    groupLabel: it.groupLabel, groupNote: it.groupNote, attributes: it.attributes,
   })));
 
   await tx.update(quotation).set({ status: 'converted', convertedInvoiceId: inv!.id }).where(eq(quotation.id, q.id));
@@ -422,7 +422,7 @@ export async function duplicateQuotationTx(
   tx: Tx, u: U, sourceId: string,
 ): Promise<{ id: string; number: string }> {
   const [q] = await tx.select().from(quotation).where(eq(quotation.id, sourceId)).limit(1);
-  if (!q) throw new Error('Quotation not found');
+  if (!q) throw new Error('Quotation not found — it may have been deleted. Refresh and try again.');
 
   const qitems = await tx.select().from(quotationItem)
     .where(eq(quotationItem.quotationId, sourceId)).orderBy(quotationItem.seq);
@@ -440,7 +440,7 @@ export async function duplicateQuotationTx(
     tenantId: u.tenantId, quotationId: dup!.id, seq: it.seq, description: it.description, hsn: it.hsn,
     qty: it.qty, uom: it.uom, rate: it.rate, gstRate: it.gstRate,
     taxableValue: it.taxableValue, isToolingCharge: it.isToolingCharge,
-    groupLabel: it.groupLabel, attributes: it.attributes,
+    groupLabel: it.groupLabel, groupNote: it.groupNote, attributes: it.attributes,
   })));
 
   return { id: dup!.id, number };
@@ -452,7 +452,7 @@ export async function duplicateOrderTx(
   tx: Tx, u: U, sourceId: string,
 ): Promise<{ id: string; number: string }> {
   const [o] = await tx.select().from(salesOrder).where(eq(salesOrder.id, sourceId)).limit(1);
-  if (!o) throw new Error('Order not found');
+  if (!o) throw new Error('Order not found — it may have been deleted. Refresh and try again.');
 
   const oitems = await tx.select().from(orderItem)
     .where(eq(orderItem.orderId, sourceId)).orderBy(orderItem.seq);
@@ -468,7 +468,7 @@ export async function duplicateOrderTx(
   await tx.insert(orderItem).values(oitems.map((it) => ({
     tenantId: u.tenantId, orderId: dup!.id, seq: it.seq, description: it.description, hsn: it.hsn,
     qty: it.qty, uom: it.uom, rate: it.rate, gstRate: it.gstRate, taxableValue: it.taxableValue,
-    groupLabel: it.groupLabel, attributes: it.attributes,
+    groupLabel: it.groupLabel, groupNote: it.groupNote, attributes: it.attributes,
   })));
 
   return { id: dup!.id, number };

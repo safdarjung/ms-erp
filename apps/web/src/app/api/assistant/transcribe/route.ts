@@ -18,24 +18,24 @@ const bodySchema = z.object({
 
 export async function POST(req: Request): Promise<Response> {
   const user = await getCurrentUser();
-  if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
+  if (!user) return Response.json({ error: 'Your session has ended — please log in again.' }, { status: 401 });
   if (!user.permissions.has('dashboard.view')) {
-    return Response.json({ error: 'Forbidden' }, { status: 403 });
+    return Response.json({ error: 'Your login doesn’t include the AI assistant — ask the owner.' }, { status: 403 });
   }
   // Transcription always uses Gemini (Claude has no audio input).
   if (!geminiEnabled()) {
-    return Response.json({ error: 'Voice typing needs GEMINI_API_KEY set on the server.' }, { status: 503 });
+    return Response.json({ error: 'Voice typing isn’t switched on for this app yet.' }, { status: 503 });
   }
 
   let body: z.infer<typeof bodySchema>;
   try {
     body = bodySchema.parse(await req.json());
   } catch {
-    return Response.json({ error: 'Invalid audio request' }, { status: 400 });
+    return Response.json({ error: 'Couldn’t send that recording — please try again.' }, { status: 400 });
   }
 
   if (!checkAiRateLimit(user.tenantId)) {
-    return Response.json({ error: 'Too many requests — try again in a minute.' }, { status: 429 });
+    return Response.json({ error: 'Too many requests — wait a minute and try again.' }, { status: 429 });
   }
 
   try {
@@ -46,6 +46,6 @@ export async function POST(req: Request): Promise<Response> {
     return Response.json({ text });
   } catch (e) {
     console.error('transcribe error:', e);
-    return Response.json({ error: 'Could not transcribe the audio — please try again.' }, { status: 502 });
+    return Response.json({ error: 'Couldn’t make out the recording — please try again.' }, { status: 502 });
   }
 }

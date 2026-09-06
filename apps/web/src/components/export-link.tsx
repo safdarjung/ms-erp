@@ -1,5 +1,6 @@
-// Presentational download link: a ghost-button <a download> with a small download
-// glyph. Server-safe (no 'use client'), so it drops straight into list pages.
+// Quiet download link ("Download for Excel"): a borderless ghost button with a
+// small download glyph. Server-safe (no 'use client'), so it drops straight
+// into list pages. Keep it last in a header row so the primary action leads.
 
 function DownloadIcon() {
   return (
@@ -12,9 +13,15 @@ function DownloadIcon() {
   );
 }
 
-export function ExportLink({ href, label = 'Export CSV' }: { href: string; label?: string }) {
+export function ExportLink({
+  href, label = 'Download for Excel', className = '',
+}: { href: string; label?: string; className?: string }) {
   return (
-    <a href={href} download className="btn-ghost text-xs">
+    <a
+      href={href}
+      download
+      className={`btn-ghost text-xs !text-muted !border-transparent hover:!border-line-strong hover:!text-ink ${className}`}
+    >
       <DownloadIcon />{label}
     </a>
   );

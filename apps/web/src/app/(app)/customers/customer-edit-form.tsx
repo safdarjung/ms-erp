@@ -1,68 +1,106 @@
 'use client';
-import { useActionState, useEffect, useState, useTransition } from 'react';
-import { updateCustomerAction, setCustomerStatusAction, type ActionState } from './actions';
+import { useActionState, useEffect, useRef, useTransition } from 'react';
+import { updateCustomerAction, setCustomerStatusAction, setCustomerStatusFormAction, type ActionState } from './actions';
+import { CustomerFields, FormErrorSummary, hasMoreDetails, type CustomerValues } from './customer-form';
 import { SubmitButton } from '@/components/submit-button';
+import { ConfirmButton } from '@/components/confirm-button';
 import { useToast } from '@/components/toast';
 
-export function CustomerStatusButton({ id, status }: { id: string; status: string }) {
+/** Id of the edit `<details>` on the customer page; `?edit=1` opens it. */
+export const EDIT_SECTION_ID = 'edit-customer';
+
+/**
+ * Hide (archive) asks first — it changes what everyone sees in lists. Unhide
+ * is a one-tap undo of that, so it needs no dialog.
+ */
+export function CustomerStatusButton({ id, status, name }: { id: string; status: string; name?: string }) {
   const [pending, start] = useTransition();
   const toast = useToast();
-  const archived = status === 'archived';
+  const who = name ?? 'this customer';
+
+  if (status === 'archived') {
+    return (
+      <button
+        type="button"
+        disabled={pending}
+        onClick={() => start(async () => {
+          const res = await setCustomerStatusAction(id, 'active');
+          toast(res.error
+            ? { title: "Couldn't unhide", description: res.error, variant: 'error' }
+            : { title: res.message ?? 'Back in lists', variant: 'success' });
+        })}
+        className="btn-ghost text-xs disabled:opacity-60"
+      >
+        {pending ? 'Working…' : 'Unhide'}
+      </button>
+    );
+  }
+  return (
+    <ConfirmButton
+      action={setCustomerStatusFormAction}
+      fields={{ id, status: 'archived' }}
+      className="btn-ghost text-xs"
+      variant="primary"
+      title={`Hide ${who} from lists?`}
+      body="Hidden customers disappear from lists and pickers. Their bills stay untouched."
+      confirmLabel="Yes, hide"
+    >
+      Hide (archive)
+    </ConfirmButton>
+  );
+}
+
+/** Header "Edit" button: opens the edit section further down and moves focus into it. */
+export function EditCustomerButton() {
   return (
     <button
       type="button"
-      disabled={pending}
-      onClick={() => start(async () => {
-        const res = await setCustomerStatusAction(id, archived ? 'active' : 'archived');
-        toast(res.error ? { title: 'Failed', description: res.error, variant: 'error' } : { title: res.message ?? 'Updated', variant: 'success' });
-      })}
-      className="btn-ghost text-sm disabled:opacity-60"
+      className="btn-ghost text-xs"
+      onClick={() => {
+        const section = document.getElementById(EDIT_SECTION_ID) as HTMLDetailsElement | null;
+        if (!section) return;
+        section.open = true;
+        section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        section.querySelector<HTMLElement>('input:not([type="hidden"])')?.focus({ preventScroll: true });
+      }}
     >
-      {pending ? '…' : archived ? 'Restore' : 'Archive'}
+      Edit
     </button>
   );
 }
 
+/** Fires one success toast after a redirect (e.g. `?added=1`), then tidies the URL. */
+export function CustomerFlash({ message, param }: { message: string; param: string }) {
+  const toast = useToast();
+  useEffect(() => {
+    toast({ title: message, variant: 'success' });
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.delete(param);
+      window.history.replaceState(null, '', url.toString());
+    } catch { /* URL tidy-up is cosmetic */ }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  return null;
+}
+
 export function CustomerEditForm({ customer }: {
-  customer: {
-    id: string; name: string; regType: string; gstin: string; stateCode: string;
-    contactPerson: string; phone: string; email: string; address: string; creditTermsDays: number;
-  };
+  customer: CustomerValues & { id: string; regType?: string };
 }) {
   const [state, action] = useActionState<ActionState, FormData>(updateCustomerAction, {});
-  const [gstin, setGstin] = useState(customer.gstin);
-  const [stateCode, setStateCode] = useState(customer.stateCode);
-  const [regType, setRegType] = useState(customer.regType || 'unregistered');
+  const ref = useRef<HTMLFormElement>(null);
   const toast = useToast();
-  useEffect(() => { if (state.ok) toast({ title: 'Customer updated', variant: 'success' }); }, [state]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const onGstin = (v: string) => {
-    const up = v.toUpperCase().trim();
-    setGstin(up);
-    if (/^\d{2}/.test(up)) setStateCode(up.slice(0, 2));
-    setRegType(up ? 'registered' : 'unregistered');
-  };
+  useEffect(() => {
+    if (state.ok) toast({ title: state.message ?? 'Customer saved', variant: 'success' });
+  }, [state]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <form action={action} className="grid grid-cols-2 md:grid-cols-4 gap-3 items-end">
+    <form ref={ref} action={action} className="space-y-3">
       <input type="hidden" name="id" value={customer.id} />
-      <div className="col-span-2 md:col-span-1"><label className="label">Name *</label><input name="name" required defaultValue={customer.name} className="field" /></div>
-      <div>
-        <label className="label">Registration</label>
-        <select name="regType" value={regType} onChange={(e) => setRegType(e.target.value)} className="field">
-          <option value="unregistered">Unregistered</option>
-          <option value="registered">GST-registered</option>
-        </select>
+      <FormErrorSummary state={state} />
+      <CustomerFields initial={customer} state={state} formRef={ref} moreOpenDefault={hasMoreDetails(customer)} />
+      <div className="flex sm:justify-end">
+        <SubmitButton className="btn-primary w-full sm:w-auto" pendingLabel="Saving…">Save changes</SubmitButton>
       </div>
-      <div><label className="label">GSTIN</label><input name="gstin" value={gstin} onChange={(e) => onGstin(e.target.value)} className="field font-mono" maxLength={15} /></div>
-      <div><label className="label">State code</label><input name="stateCode" value={stateCode} onChange={(e) => setStateCode(e.target.value)} className="field" maxLength={2} inputMode="numeric" /></div>
-      <div><label className="label">Contact person</label><input name="contactPerson" defaultValue={customer.contactPerson} className="field" /></div>
-      <div><label className="label">Phone</label><input name="phone" defaultValue={customer.phone} className="field" inputMode="tel" /></div>
-      <div className="col-span-2"><label className="label">Email</label><input name="email" type="email" defaultValue={customer.email} className="field" /></div>
-      <div className="col-span-2 md:col-span-3"><label className="label">Address</label><input name="address" defaultValue={customer.address} className="field" /></div>
-      <div><label className="label">Credit days</label><input name="creditTermsDays" type="number" min={0} defaultValue={customer.creditTermsDays} className="field" /></div>
-      {state.error && <p className="text-sm text-crit col-span-2 md:col-span-4">{state.error}</p>}
-      <div className="col-span-2 md:col-span-4 flex md:justify-end"><SubmitButton className="btn-primary w-full md:w-auto">Save changes</SubmitButton></div>
     </form>
   );
 }
