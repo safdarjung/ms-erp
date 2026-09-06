@@ -6,8 +6,8 @@ export type LeadStage = (typeof LEAD_STAGES)[number];
 
 export const LEAD_STAGE_LABELS: Record<LeadStage, string> = {
   new: 'New',
-  contacted: 'Contacted',
-  negotiation: 'Negotiation',
+  contacted: 'In touch',
+  negotiation: 'Quoted / negotiating',
   won: 'Won',
   lost: 'Lost',
 };
@@ -26,7 +26,7 @@ export type QuotationStatus = (typeof QUOTATION_STATUSES)[number];
 export const QUOTATION_SETTABLE_STATUSES = ['draft', 'sent', 'approved', 'rejected'] as const;
 
 export const QUOTATION_STATUS_LABELS: Record<QuotationStatus, string> = {
-  draft: 'Draft', sent: 'Sent', approved: 'Approved', rejected: 'Rejected', converted: 'Converted',
+  draft: 'Not sent yet', sent: 'Sent to customer', approved: 'Customer approved', rejected: 'Customer declined', converted: 'Bill made',
 };
 
 // Invoice lifecycle. 'issued' on creation; 'cancelled' by hand. 'paid' is
@@ -46,14 +46,14 @@ export const PAYMENT_STATES = ['unpaid', 'partial', 'paid', 'overdue', 'cancelle
 export type PaymentState = (typeof PAYMENT_STATES)[number];
 
 export const PAYMENT_STATE_LABELS: Record<PaymentState, string> = {
-  unpaid: 'Unpaid', partial: 'Partially paid', paid: 'Paid', overdue: 'Overdue', cancelled: 'Cancelled',
+  unpaid: 'Unpaid', partial: 'Partly paid', paid: 'Paid', overdue: 'Overdue', cancelled: 'Cancelled',
 };
 
 export const PAYMENT_METHODS = ['bank', 'upi', 'cash', 'cheque', 'card', 'other'] as const;
 export type PaymentMethod = (typeof PAYMENT_METHODS)[number];
 
 export const PAYMENT_METHOD_LABELS: Record<PaymentMethod, string> = {
-  bank: 'Bank transfer / NEFT', upi: 'UPI', cash: 'Cash', cheque: 'Cheque', card: 'Card', other: 'Other',
+  bank: 'Bank transfer (NEFT / RTGS / IMPS)', upi: 'UPI', cash: 'Cash', cheque: 'Cheque', card: 'Card', other: 'Other',
 };
 
 /**
@@ -79,7 +79,7 @@ export const MATERIAL_OWNERSHIP = ['customer', 'company'] as const;
 export type MaterialOwnership = (typeof MATERIAL_OWNERSHIP)[number];
 
 export const MATERIAL_OWNERSHIP_LABELS: Record<MaterialOwnership, string> = {
-  customer: 'Customer-supplied material',
+  customer: 'Customer supplies material',
   company: 'We supply material',
 };
 
