@@ -321,6 +321,20 @@ export const aiAction = pgTable('ai_action', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({ tenantIdx: index('ai_action_tenant_idx').on(t.tenantId, t.createdAt) }));
 
+// Once-a-day AI briefing for the dashboard ("what needs attention today"),
+// cached per tenant so the model runs at most once per day per business. The
+// facts it was written from are stored beside the prose for traceability.
+export const aiBriefing = pgTable('ai_briefing', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id').notNull(),
+  // Calendar day in India time, YYYY-MM-DD.
+  day: varchar('day', { length: 10 }).notNull(),
+  content: text('content').notNull(),
+  facts: jsonb('facts'),
+  model: varchar('model', { length: 60 }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({ dayUq: uniqueIndex('ai_briefing_day_uq').on(t.tenantId, t.day) }));
+
 // Customer receipts against a tax invoice (accounts-receivable). Outstanding &
 // aging are derived from these vs the invoice grand total — never stored stale.
 export const payment = pgTable('payment', {

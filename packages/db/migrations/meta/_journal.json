@@ -64,6 +64,13 @@
       "when": 1788411390099,
       "tag": "0008_petite_union_jack",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1789577140464,
+      "tag": "0009_panoramic_corsair",
+      "breakpoints": true
     }
   ]
 }
