@@ -7,7 +7,8 @@ import {
 } from '@ms/core';
 import { requireUser, can } from '@/lib/rbac';
 import { dashboardData, getOutreachSettings } from '@/lib/queries';
-import { buildWhatsappLink, buildPaymentReminderLink } from '@/lib/outreach';
+import { buildWhatsappLink, buildPaymentReminderLink, buildQuoteFollowupLink } from '@/lib/outreach';
+import { sharePath, appBaseUrl } from '@/lib/share';
 import { formatDate, dueLabel, followupLabel } from '@/lib/format';
 import { NAV, NAV_GROUPS } from '@/lib/nav-labels';
 import { WhatsappButton } from '@/components/whatsapp-button';
@@ -15,6 +16,7 @@ import { StatusPill } from '@/components/status-pill';
 import { MobileList, DesktopTable, ListCard } from '@/components/list-cards';
 import { DismissableTip } from '@/components/app-shell';
 import { AskCard } from './ask-card';
+import { BriefingCard } from './briefing-card';
 
 export const metadata = { title: 'Home' };
 
@@ -110,6 +112,8 @@ function RecentDocs({
 export default async function DashboardPage() {
   const user = await requireUser();
   const [d, outreach] = await Promise.all([dashboardData(), getOutreachSettings()]);
+  const ai = aiEnabled();
+  const base = appBaseUrl();
   const firstName = user.name.split(' ')[0];
   const pipelineOpen = d.pipeline.filter((p) => !CLOSED_STAGES.includes(p.stage));
   const pipelineValue = pipelineOpen.reduce((s, p) => s + p.value, 0);
@@ -172,7 +176,60 @@ export default async function DashboardPage() {
             ))}
           </ul>
         )}
+        <BriefingCard enabled={ai} />
       </section>
+
+      {(d.staleQuotes.length > 0 || d.ordersDue.length > 0) && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
+          {d.staleQuotes.length > 0 && (
+            <section className="card border-steel/30" aria-labelledby="stale-heading">
+              <div className="flex items-center justify-between px-4 py-2.5 border-b border-line">
+                <h2 id="stale-heading" className="font-medium text-sm text-steel flex items-center gap-1.5"><span aria-hidden>✉</span> Quotations waiting for a reply</h2>
+                <Link href="/quotations?status=sent" className="text-xs text-steel hover:underline">See all →</Link>
+              </div>
+              <ul className="divide-y divide-line">
+                {d.staleQuotes.map((q) => {
+                  const wa = buildQuoteFollowupLink({
+                    phone: q.phone, customerName: q.customerName, quotationNumber: q.number, total: Number(q.grandTotal),
+                    pdfLink: `${base}${sharePath('quotation', q.id, user.tenantId)}`, companyNumber: outreach.whatsappNumber,
+                  });
+                  return (
+                    <li key={q.id} className="flex items-center gap-2 px-4 py-2 text-sm">
+                      <div className="min-w-0 flex-1">
+                        <Link href={`/quotations/${q.id}`} className="font-mono text-xs text-steel hover:underline">{q.number}</Link>
+                        <span className="text-ink"> · {q.customerName ?? '—'}</span>
+                        <div className="text-xs text-muted">Sent {q.days === 0 ? 'today' : `${q.days} day${q.days === 1 ? '' : 's'} ago`} · no answer yet</div>
+                      </div>
+                      <span className="tabular-nums font-mono text-ink whitespace-nowrap">{formatINR(q.grandTotal)}</span>
+                      {wa && <WhatsappButton href={wa} />}
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+          )}
+          {d.ordersDue.length > 0 && (
+            <section className="card border-warn/30" aria-labelledby="orders-due-heading">
+              <div className="flex items-center justify-between px-4 py-2.5 border-b border-line">
+                <h2 id="orders-due-heading" className="font-medium text-sm text-warn flex items-center gap-1.5"><span aria-hidden>⏱</span> Orders due this week</h2>
+                <Link href="/orders?status=in_progress" className="text-xs text-steel hover:underline">Order book →</Link>
+              </div>
+              <ul className="divide-y divide-line">
+                {d.ordersDue.map((o) => (
+                  <li key={o.id} className="flex items-center gap-2 px-4 py-2 text-sm">
+                    <div className="min-w-0 flex-1">
+                      <Link href={`/orders/${o.id}`} className="font-mono text-xs text-steel hover:underline">{o.number}</Link>
+                      <span className="text-ink"> · {o.customerName ?? '—'}</span>
+                      <div className={`text-xs ${o.late ? 'text-crit' : 'text-muted'}`}>{o.late ? 'Late — was due' : 'Due'} {formatDate(o.deliveryDate)}</div>
+                    </div>
+                    <span className="tabular-nums font-mono text-ink whitespace-nowrap">{formatINR(o.totalValue)}</span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+        </div>
+      )}
 
       {(d.overdueInvoices.length > 0 || d.followupLeads.length > 0) && (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
@@ -253,7 +310,7 @@ export default async function DashboardPage() {
         </div>
 
         <div className="flex flex-col gap-5">
-          <AskCard enabled={aiEnabled()} />
+          <AskCard enabled={ai} />
 
           <section className="card p-5" aria-labelledby="stages-heading">
             <h2 id="stages-heading" className="font-medium text-sm mb-3">Enquiries by stage</h2>

@@ -7,6 +7,8 @@ import { withTenant, tenant } from '@ms/db';
 import { getCurrentUser } from '@/lib/auth';
 import { checkAiRateLimit, executeAnalyticsQuery, recordAiUsage } from '@/lib/ai';
 import { getDocumentSnapshot, stageAction } from '@/lib/agent';
+import { draftMessageForAssistant, priceHistoryForAssistant } from '@/lib/agent-instant';
+import { appBaseUrl } from '@/lib/share';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -52,7 +54,8 @@ const DETAIL_PAGES: { re: RegExp; entity: string }[] = [
 const LIST_PAGES: Record<string, string> = {
   '/invoices': 'the Bills (invoices) list', '/quotations': 'the Quotations list', '/orders': 'the Orders list',
   '/customers': 'the Customers list', '/leads': 'the Enquiries (leads) list', '/leads/inbox': 'the Email enquiries list',
-  '/dashboard': 'the Dashboard', '/analytics': 'the Analytics page',
+  '/dashboard': 'the Dashboard', '/analytics': 'the Reports (analytics) page', '/search': 'the Search page',
+  '/settings/ai': 'the AI activity & usage page', '/settings/users': 'the Staff (users) page', '/guide': 'the Help & guide page',
 };
 
 /** Turn the current app path into one trusted context line for the assistant. */
@@ -93,6 +96,8 @@ export async function POST(req: Request): Promise<Response> {
 
   const abort = new AbortController();
   req.signal.addEventListener('abort', () => abort.abort());
+  // Absolute origin for public share links inserted into messages.
+  const baseUrl = appBaseUrl(req);
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
@@ -108,6 +113,8 @@ export async function POST(req: Request): Promise<Response> {
           executeQuery: (wrapped) => executeAnalyticsQuery(user.tenantId, user.userId, wrapped),
           stageAction: (kind, input) => stageAction(user, kind, input),
           getDocument: (input) => getDocumentSnapshot(user, input),
+          priceHistory: (input) => priceHistoryForAssistant(user, input),
+          draftMessage: (input) => draftMessageForAssistant(user, input, baseUrl),
           signal: abort.signal,
         });
         for await (const ev of events) {

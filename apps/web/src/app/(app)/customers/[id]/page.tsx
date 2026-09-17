@@ -10,6 +10,7 @@ import { requireUser, can } from '@/lib/rbac';
 import { formatDate } from '@/lib/format';
 import { StatusPill } from '@/components/status-pill';
 import { ConfirmButton } from '@/components/confirm-button';
+import { AskAiLink } from '@/components/app-shell';
 import {
   CustomerEditForm, CustomerStatusButton, EditCustomerButton, CustomerFlash, EDIT_SECTION_ID,
 } from '../customer-edit-form';
@@ -55,6 +56,9 @@ export default async function CustomerDetail({ params, searchParams }: {
     : linkedParts[0];
 
   const canEdit = can(user, 'customer.edit');
+  // Statement of account: only useful once there is a live bill to show.
+  const showStatement = can(user, 'invoice.view') && liveBills.length > 0;
+  const statementHref = `/print/statement/${c.id}?print=1`;
 
   return (
     <div className="max-w-5xl">
@@ -74,6 +78,9 @@ export default async function CustomerDetail({ params, searchParams }: {
           {can(user, 'quotation.create') && <Link href={`/quotations/new?customer=${c.id}`} className="btn-ghost text-xs">+ Quotation</Link>}
           {can(user, 'order.create') && <Link href={`/orders/new?customer=${c.id}`} className="btn-ghost text-xs">+ Order</Link>}
           {can(user, 'invoice.create') && <Link href={`/invoices/new?customer=${c.id}`} className="btn-primary text-xs">+ Bill</Link>}
+          {showStatement && (
+            <a href={statementHref} target="_blank" rel="noreferrer" className="btn-ghost text-xs">Statement PDF</a>
+          )}
           {canEdit && <EditCustomerButton />}
           {canEdit && <CustomerStatusButton id={c.id} status={c.status} name={c.name} />}
         </div>
@@ -113,6 +120,9 @@ export default async function CustomerDetail({ params, searchParams }: {
 
         <div className="md:col-span-2 flex flex-col gap-5">
           <LedgerTable title="Bills" href="/invoices" empty="No bills yet."
+            titleExtra={showStatement && (
+              <a href={statementHref} target="_blank" rel="noreferrer" className="text-xs text-steel hover:underline font-normal">Statement (this year) ↗</a>
+            )}
             rows={inv.map((i) => ({
               id: i.id, number: i.number, date: i.docDate,
               amount: formatINR(i.grandTotal),
@@ -172,7 +182,13 @@ export default async function CustomerDetail({ params, searchParams }: {
         </details>
       )}
 
-      <div className="mt-5"><Link href="/customers" className="text-steel text-sm hover:underline">← All customers</Link></div>
+      <div className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-2">
+        <Link href="/customers" className="text-steel text-sm hover:underline">← All customers</Link>
+        <span className="text-xs text-muted">Ask AI:</span>
+        <AskAiLink question={`Summarise ${c.name} for me — what we quoted, billed and what is still due`} className="text-xs text-accent hover:underline">✦ Summary of this customer</AskAiLink>
+        {outstanding > 0.5 && <AskAiLink question={`Write a polite payment reminder for ${c.name} for the ${formatINR(outstanding)} still due, to send on WhatsApp`} className="text-xs text-accent hover:underline">✦ Payment reminder</AskAiLink>}
+        <AskAiLink question={`What rates have we given ${c.name} before?`} className="text-xs text-accent hover:underline">✦ Past rates</AskAiLink>
+      </div>
     </div>
   );
 }
@@ -181,13 +197,16 @@ function Row({ label, value }: { label: string; value: ReactNode }) {
   return <div className="flex items-start justify-between gap-3"><span className="text-muted shrink-0">{label}</span><span className="text-ink text-right min-w-0 [overflow-wrap:anywhere]">{value}</span></div>;
 }
 
-function LedgerTable({ title, href, rows, empty }: {
-  title: string; href: string; empty: string;
+function LedgerTable({ title, href, rows, empty, titleExtra }: {
+  title: string; href: string; empty: string; titleExtra?: ReactNode;
   rows: { id: string; number: string; date: Date; amount: string; extra: string; pill: ReactNode }[];
 }) {
   return (
     <div className="card overflow-x-auto">
-      <div className="px-4 py-3 border-b border-line font-medium text-sm">{title} <span className="text-muted font-normal">· {rows.length}</span></div>
+      <div className="px-4 py-3 border-b border-line font-medium text-sm flex items-center justify-between gap-3 flex-wrap">
+        <span>{title} <span className="text-muted font-normal">· {rows.length}</span></span>
+        {titleExtra}
+      </div>
       {rows.length === 0 ? (
         <div className="px-4 py-5 text-sm text-muted">{empty}</div>
       ) : (

@@ -69,7 +69,7 @@ export function OutreachForm({ settings }: { settings: OutreachSettings }) {
       </div>
       <div>
         <p className="label">Preview — how {SAMPLE.name} would see it</p>
-        <div className="rounded-lg bg-[#e7f6e5] border border-[#cfe9cb] px-3 py-2 text-sm text-ink whitespace-pre-wrap max-w-md" aria-live="polite">
+        <div className="rounded-lg bg-ok-soft border border-ok/30 px-3 py-2 text-sm text-ink whitespace-pre-wrap max-w-md" aria-live="polite">
           {fillPreview(template, number)}
         </div>
       </div>

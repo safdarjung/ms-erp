@@ -63,6 +63,7 @@ export function plainReason(reason: string | null | undefined, status: string): 
   if (/allowlist|allowed list/.test(r)) return "Sender isn't on your allowed list (change it in Email enquiry setup)";
   if (/auto-submitted|no-reply|noreply|automatic/.test(r)) return 'Sent by an automatic system';
   if (/unsubscribe|newsletter|precedence|bulk|spam score|junk/.test(r)) return 'Looks like a newsletter or bulk mail';
+  if (/^ai read it/.test(r)) return 'AI read it as a newsletter, notification or other non-enquiry mail';
   return 'Marked automatically';
 }
 
@@ -98,6 +99,9 @@ export function InboxRow({ message: m, canManage }: { message: InboxMessage; can
           </div>
           <div className="font-medium text-ink truncate">{m.subject || '(no subject)'}</div>
           <div className="text-xs text-muted truncate">From: {who}</div>
+          {m.parseMethod === 'ai' && m.status !== 'converted' && (
+            <div className="text-xs text-accent mt-0.5"><span aria-hidden>✦</span> Details picked out by AI — check them before creating the enquiry.</div>
+          )}
           {reason && (
             <div className="text-xs text-muted mt-1">
               {reason}

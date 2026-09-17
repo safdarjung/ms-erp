@@ -123,7 +123,7 @@ export function CustomerFields({ initial = {}, state, formRef, moreOpenDefault =
             <FieldError id={`${fid('gstin')}-err`} message={err('gstin')} />
             {extras.gstin}
             <p id={`${fid('gstin')}-help`} className="mt-1">
-              <span className={`pill ${gstin ? 'bg-[#e4f1ea] text-ok' : 'bg-surface-2 text-muted'}`}>
+              <span className={`pill ${gstin ? 'bg-ok-soft text-ok' : 'bg-surface-2 text-muted'}`}>
                 {gstin ? 'GST-registered ✓' : 'No GST (unregistered)'}
               </span>
             </p>

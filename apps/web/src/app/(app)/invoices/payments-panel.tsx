@@ -95,20 +95,30 @@ export function PaymentsPanel({
                 {p.reference && <span className="text-muted"> · {p.reference}</span>}
                 <div className="text-xs text-muted">{formatDate(p.paidOn)}{p.notes ? ` — ${p.notes}` : ''}</div>
               </div>
-              {canEdit && (
-                <ConfirmButton
-                  action={deletePaymentAction}
-                  fields={{ paymentId: p.id, invoiceId }}
-                  className="btn-ghost text-xs !text-crit !border-crit/40 hover:!bg-[#f6e5e1] shrink-0"
-                  title={`Remove this ${formatINR(p.amount)} payment?`}
-                  body={`${formatINR(p.amount)} will be added back to the balance due. You can add it again later.`}
-                  confirmLabel="Yes, remove"
-                  pendingLabel="Removing…"
-                  toastOk={`${formatINR(p.amount)} removed · added back to balance due`}
+              <div className="flex items-center gap-1 shrink-0">
+                <a
+                  href={`/print/receipt/${p.id}?print=1`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-xs text-steel hover:underline inline-flex items-center min-h-11 px-2"
                 >
-                  Remove
-                </ConfirmButton>
-              )}
+                  Receipt ↗
+                </a>
+                {canEdit && (
+                  <ConfirmButton
+                    action={deletePaymentAction}
+                    fields={{ paymentId: p.id, invoiceId }}
+                    className="btn-ghost text-xs !text-crit !border-crit/40 hover:!bg-crit-soft shrink-0"
+                    title={`Remove this ${formatINR(p.amount)} payment?`}
+                    body={`${formatINR(p.amount)} will be added back to the balance due. You can add it again later.`}
+                    confirmLabel="Yes, remove"
+                    pendingLabel="Removing…"
+                    toastOk={`${formatINR(p.amount)} removed · added back to balance due`}
+                  >
+                    Remove
+                  </ConfirmButton>
+                )}
+              </div>
             </li>
           ))}
         </ul>

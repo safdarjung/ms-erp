@@ -78,12 +78,148 @@ export function buildTaxLines(
 }
 
 // ── Formatting ──────────────────────────────────────────────────────────────
+// Shared with the statement and receipt templates — every string that lands in
+// HTML goes through `esc`.
 
-const inr = (n: number) => n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+export const inr = (n: number) => n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const qty = (n: number) => String(Number(n));
-const esc = (s: string) =>
+export const esc = (s: string) =>
   String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-const multiline = (s: string) => esc(s).replace(/\r?\n/g, '<br>');
+export const multiline = (s: string) => esc(s).replace(/\r?\n/g, '<br>');
+
+// ── Shared look: sheet, letterhead, info grid, footer ───────────────────────
+// Exported so the statement and receipt print as the same family of documents.
+// Changing these changes every printed document — re-run src/pdf/preview.ts.
+
+/** `@page`, base type, the on-screen A4 sheet and the phone preview scale. */
+export const SHEET_CSS = `  @page { size: A4; margin: 12mm; }
+  * { box-sizing: border-box; margin: 0; }
+  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body {
+    font-family: Arial, Helvetica, sans-serif; color: #111;
+    font-size: 10.5px; line-height: 1.45;
+  }
+  .sheet { display: flex; flex-direction: column; min-height: 273mm; }
+  @media screen {
+    html { background: #eef1f4; }
+    body { padding: 24px 12px; }
+    .sheet {
+      width: 210mm; min-height: 297mm; padding: 12mm; margin: 0 auto;
+      background: #fff; box-shadow: 0 2px 24px rgba(20, 30, 40, .18);
+    }
+  }
+  /* On a phone the on-screen preview shrinks to fit the width (print is unaffected). */
+  @media screen and (max-width: 640px) {
+    body { padding: 8px 0; }
+    .sheet { transform: scale(calc(100vw / 230mm)); transform-origin: top left; margin: 0; }
+  }`;
+
+/** Company band, address block, rule and the big document title. */
+export const LETTERHEAD_CSS = `  /* ── Letterhead ─────────────────────────────────────────────── */
+  .band { background: #e6f4f8; text-align: center; padding: 14px 8px 10px; border-radius: 2px; }
+  .band .name {
+    /* inline-block so its box hugs the actual text — .band centres it exactly
+       as a block div would, but this also makes its rendered width measurable
+       (a block div's width would just be the band's, whatever the text is). */
+    display: inline-block;
+    font-family: Georgia, 'Times New Roman', serif; font-style: italic; font-weight: 700;
+    font-size: 48px; line-height: 1.05; color: #1c8ea8; letter-spacing: 2px;
+  }
+  /* Kept to the name's own width (set inline below, once rendered) and centred
+     under it, rather than spanning the full letterhead like the name doesn't. */
+  .addr {
+    display: flex; flex-direction: column; align-items: center; gap: 1px;
+    margin: 8px auto 0; max-width: 92%; font-weight: 600; font-size: 10px; text-align: center;
+  }
+  .addr .row { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 16px; }
+  .addr .gst { white-space: nowrap; }
+  .rule { border-top: 2.5px solid #111; margin: 7px 0 0; }
+
+  .doctype {
+    text-align: center; font-weight: 800; font-size: 20px; letter-spacing: 3px;
+    text-transform: uppercase; margin: 11px 0 9px; color: #000;
+  }`;
+
+/** Bordered two-cell "to / meta" grid. */
+export const INFO_CSS = `  /* ── Buyer / meta grid ──────────────────────────────────────── */
+  table.info { width: 100%; border-collapse: collapse; }
+  table.info td { border: 1px solid #111; vertical-align: top; padding: 7px 9px; }
+  .buyer { width: 55%; }
+  .buyer .to { font-size: 8.5px; letter-spacing: 1.2px; text-transform: uppercase; color: #555; margin-bottom: 3px; }
+  .buyer .nm { font-weight: 700; font-size: 12px; margin-bottom: 1px; }
+  .buyer .gstline { font-weight: 700; margin-top: 4px; }
+  .metarow { display: flex; justify-content: space-between; gap: 12px; padding: 2.5px 0; border-bottom: 1px solid #e2e2e2; }
+  .metarow:last-child { border-bottom: none; }
+  .metarow span { color: #555; }
+  .metarow b { text-align: right; }
+  .docno { font-size: 12px; }`;
+
+/** Terms / bank / signature strip and the fine print. */
+export const FOOTER_CSS = `  /* ── Footer: terms / bank / signature ───────────────────────── */
+  table.footer { width: 100%; border-collapse: collapse; margin-top: 8px; }
+  table.footer td { border: 1px solid #111; vertical-align: top; padding: 7px 9px; }
+  .boxlab { font-size: 8.5px; letter-spacing: 1.2px; text-transform: uppercase; color: #555; margin-bottom: 3px; }
+  .terms { width: 44%; font-size: 9.5px; }
+  .terms ol { padding-left: 14px; }
+  .terms li { margin: 1.5px 0; }
+  .bank { width: 28%; font-size: 9.5px; line-height: 1.6; }
+  .bank b { font-size: 10px; }
+  .sign { width: 28%; }
+  .signin { display: flex; flex-direction: column; justify-content: space-between; min-height: 24mm; }
+  .signin .for { font-weight: 700; font-size: 10.5px; }
+  .signin .who { text-align: center; padding-top: 3px; border-top: 1px solid #999; font-size: 9.5px; }
+  .fine { text-align: center; color: #777; font-size: 8px; letter-spacing: .4px; margin-top: 6px; }
+  .mut { color: #999; }`;
+
+export type LetterheadCompany = DocumentData['company'];
+
+/** Letterhead band + address + rule + document title (the `<header>`). */
+export function renderLetterhead(company: LetterheadCompany, docLabel: string): string {
+  return `  <header>
+    <div class="band"><div class="name">${esc(company.name)}</div></div>
+    <div class="addr">
+      <div>${esc(company.factory)}</div>
+      <div class="row"><span>${esc(company.office)}</span><span class="gst">GSTIN&nbsp;: ${esc(company.gstin)}</span></div>
+    </div>
+    <div class="rule"></div>
+    <div class="doctype">${esc(docLabel)}</div>
+  </header>`;
+}
+
+/** "Our Bank Details" footer cell. */
+export function renderBankCell(bank: LetterheadCompany['bank']): string {
+  return `      <td class="bank">
+        <div class="boxlab">Our Bank Details</div>
+        <b>${esc(bank.name)}</b><br>
+        A/C No. : ${esc(bank.acNo)}<br>
+        IFSC : ${esc(bank.ifsc)}
+      </td>`;
+}
+
+/** "For <company> / Authorised Signatory" footer cell. */
+export function renderSignCell(companyName: string): string {
+  return `      <td class="sign">
+        <div class="signin">
+          <div class="for">For ${esc(companyName)}</div>
+          <div class="who">Authorised Signatory</div>
+        </div>
+      </td>`;
+}
+
+/** Keeps the address block no wider than the company name above it (measured live). */
+export const ADDR_FIT_SCRIPT = `<script>
+  // Keep the address block no wider than the company name above it — measured
+  // live so it holds for any tenant's name/address length, then falls back to
+  // the CSS max-width if this can't run.
+  (function () {
+    var name = document.querySelector('.band .name');
+    var addr = document.querySelector('.addr');
+    if (!name || !addr) return;
+    var w = name.getBoundingClientRect().width;
+    // A floor keeps the address readable even for a very short company name.
+    if (w > 0) addr.style.maxWidth = Math.max(Math.ceil(w), 260) + 'px';
+  })();
+</script>`;
 
 export function renderDocumentHTML(d: DocumentData): string {
   // Custom fields split two ways (@ms/core decides — never re-implement the rule):
@@ -170,65 +306,11 @@ export function renderDocumentHTML(d: DocumentData): string {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(d.docLabel)} ${esc(d.number)} — ${esc(d.company.name)}</title>
 <style>
-  @page { size: A4; margin: 12mm; }
-  * { box-sizing: border-box; margin: 0; }
-  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  body {
-    font-family: Arial, Helvetica, sans-serif; color: #111;
-    font-size: 10.5px; line-height: 1.45;
-  }
-  .sheet { display: flex; flex-direction: column; min-height: 273mm; }
-  @media screen {
-    html { background: #eef1f4; }
-    body { padding: 24px 12px; }
-    .sheet {
-      width: 210mm; min-height: 297mm; padding: 12mm; margin: 0 auto;
-      background: #fff; box-shadow: 0 2px 24px rgba(20, 30, 40, .18);
-    }
-  }
-  /* On a phone the on-screen preview shrinks to fit the width (print is unaffected). */
-  @media screen and (max-width: 640px) {
-    body { padding: 8px 0; }
-    .sheet { transform: scale(calc(100vw / 230mm)); transform-origin: top left; margin: 0; }
-  }
+${SHEET_CSS}
 
-  /* ── Letterhead ─────────────────────────────────────────────── */
-  .band { background: #e6f4f8; text-align: center; padding: 14px 8px 10px; border-radius: 2px; }
-  .band .name {
-    /* inline-block so its box hugs the actual text — .band centres it exactly
-       as a block div would, but this also makes its rendered width measurable
-       (a block div's width would just be the band's, whatever the text is). */
-    display: inline-block;
-    font-family: Georgia, 'Times New Roman', serif; font-style: italic; font-weight: 700;
-    font-size: 48px; line-height: 1.05; color: #1c8ea8; letter-spacing: 2px;
-  }
-  /* Kept to the name's own width (set inline below, once rendered) and centred
-     under it, rather than spanning the full letterhead like the name doesn't. */
-  .addr {
-    display: flex; flex-direction: column; align-items: center; gap: 1px;
-    margin: 8px auto 0; max-width: 92%; font-weight: 600; font-size: 10px; text-align: center;
-  }
-  .addr .row { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 16px; }
-  .addr .gst { white-space: nowrap; }
-  .rule { border-top: 2.5px solid #111; margin: 7px 0 0; }
+${LETTERHEAD_CSS}
 
-  .doctype {
-    text-align: center; font-weight: 800; font-size: 20px; letter-spacing: 3px;
-    text-transform: uppercase; margin: 11px 0 9px; color: #000;
-  }
-
-  /* ── Buyer / meta grid ──────────────────────────────────────── */
-  table.info { width: 100%; border-collapse: collapse; }
-  table.info td { border: 1px solid #111; vertical-align: top; padding: 7px 9px; }
-  .buyer { width: 55%; }
-  .buyer .to { font-size: 8.5px; letter-spacing: 1.2px; text-transform: uppercase; color: #555; margin-bottom: 3px; }
-  .buyer .nm { font-weight: 700; font-size: 12px; margin-bottom: 1px; }
-  .buyer .gstline { font-weight: 700; margin-top: 4px; }
-  .metarow { display: flex; justify-content: space-between; gap: 12px; padding: 2.5px 0; border-bottom: 1px solid #e2e2e2; }
-  .metarow:last-child { border-bottom: none; }
-  .metarow span { color: #555; }
-  .metarow b { text-align: right; }
-  .docno { font-size: 12px; }
+${INFO_CSS}
 
   /* ── Items ──────────────────────────────────────────────────── */
   .grow { flex: 1; display: flex; flex-direction: column; margin-top: 8px; }
@@ -273,33 +355,11 @@ export function renderDocumentHTML(d: DocumentData): string {
   tr.grand td { background: #f0f3f5; font-size: 12px; font-weight: 700; padding: 7px 8px; }
   tr.grand .tlabel { color: #111; letter-spacing: .5px; }
 
-  /* ── Footer: terms / bank / signature ───────────────────────── */
-  table.footer { width: 100%; border-collapse: collapse; margin-top: 8px; }
-  table.footer td { border: 1px solid #111; vertical-align: top; padding: 7px 9px; }
-  .boxlab { font-size: 8.5px; letter-spacing: 1.2px; text-transform: uppercase; color: #555; margin-bottom: 3px; }
-  .terms { width: 44%; font-size: 9.5px; }
-  .terms ol { padding-left: 14px; }
-  .terms li { margin: 1.5px 0; }
-  .bank { width: 28%; font-size: 9.5px; line-height: 1.6; }
-  .bank b { font-size: 10px; }
-  .sign { width: 28%; }
-  .signin { display: flex; flex-direction: column; justify-content: space-between; min-height: 24mm; }
-  .signin .for { font-weight: 700; font-size: 10.5px; }
-  .signin .who { text-align: center; padding-top: 3px; border-top: 1px solid #999; font-size: 9.5px; }
-  .fine { text-align: center; color: #777; font-size: 8px; letter-spacing: .4px; margin-top: 6px; }
-  .mut { color: #999; }
+${FOOTER_CSS}
 </style></head>
 <body>
 <div class="sheet">
-  <header>
-    <div class="band"><div class="name">${esc(d.company.name)}</div></div>
-    <div class="addr">
-      <div>${esc(d.company.factory)}</div>
-      <div class="row"><span>${esc(d.company.office)}</span><span class="gst">GSTIN&nbsp;: ${esc(d.company.gstin)}</span></div>
-    </div>
-    <div class="rule"></div>
-    <div class="doctype">${esc(d.docLabel)}</div>
-  </header>
+${renderLetterhead(d.company, d.docLabel)}
 
   <table class="info">
     <tr>
@@ -350,34 +410,12 @@ export function renderDocumentHTML(d: DocumentData): string {
         <div class="boxlab">Terms &amp; Conditions</div>
         ${termsHtml}
       </td>
-      <td class="bank">
-        <div class="boxlab">Our Bank Details</div>
-        <b>${esc(b.name)}</b><br>
-        A/C No. : ${esc(b.acNo)}<br>
-        IFSC : ${esc(b.ifsc)}
-      </td>
-      <td class="sign">
-        <div class="signin">
-          <div class="for">For ${esc(d.company.name)}</div>
-          <div class="who">Authorised Signatory</div>
-        </div>
-      </td>
+${renderBankCell(b)}
+${renderSignCell(d.company.name)}
     </tr>
   </table>
   <div class="fine">Subject to Faridabad jurisdiction · E. &amp; O.E.${d.docLabel === 'QUOTATION' ? '' : ' · This is a computer-generated invoice.'}</div>
 </div>
-<script>
-  // Keep the address block no wider than the company name above it — measured
-  // live so it holds for any tenant's name/address length, then falls back to
-  // the CSS max-width if this can't run.
-  (function () {
-    var name = document.querySelector('.band .name');
-    var addr = document.querySelector('.addr');
-    if (!name || !addr) return;
-    var w = name.getBoundingClientRect().width;
-    // A floor keeps the address readable even for a very short company name.
-    if (w > 0) addr.style.maxWidth = Math.max(Math.ceil(w), 260) + 'px';
-  })();
-</script>
+${ADDR_FIT_SCRIPT}
 </body></html>`;
 }

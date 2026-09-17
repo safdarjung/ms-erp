@@ -10,7 +10,8 @@ export const metadata = { title: 'Help & guide' };
 const AI_EXAMPLES = [
   'Sharma Auto ke liye 200mm die ka quotation banao, ₹50,000',
   'Bharat Pumps ke bill pe ₹40,000 UPI se aaya — record karo',
-  'Kaun kaun paisa dena baaki hai?',
+  'Kaun kaun paisa dena baaki hai? Reminder message bhi bana do',
+  'Blanking die ka last rate kya tha?',
 ];
 
 const FLOW: { text: ReactNode; nav: NavKey }[] = [
@@ -26,7 +27,7 @@ function Section({ n, title, children }: { n: number; title: string; children: R
   return (
     <section className="mb-8">
       <h2 className="text-lg font-semibold tracking-tight mb-3 flex items-center gap-2.5">
-        <span className="shrink-0 w-7 h-7 rounded-full bg-accent text-white grid place-items-center font-mono text-sm" aria-hidden>{n}</span>
+        <span className="shrink-0 w-7 h-7 rounded-full bg-accent text-on-accent grid place-items-center font-mono text-sm" aria-hidden>{n}</span>
         {title}
       </h2>
       {children}
@@ -66,6 +67,18 @@ export default async function GuidePage() {
           </ul>
           <p className="text-xs text-muted mt-3">You can also attach a photo of a PO or price list, or tap the mic and speak.</p>
         </div>
+        <ul className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
+          {[
+            ['Messages', 'Ask for a follow-up or payment reminder — it writes the WhatsApp message, you tap Send. Nothing goes out by itself.'],
+            ['Past rates', 'While typing an item on a quotation, past prices pop up. Or ask: “blanking die ka last rate?”'],
+            ['Today’s summary', 'The Home screen tells you in plain words what to chase today.'],
+            ['Share a PDF', 'Share on WhatsApp now sends a link the customer can open without any login.'],
+            ['Search anything', 'The search box at the top finds a customer, phone number, bill or quotation number.'],
+            ['Statement & receipts', 'Every customer page has a Statement PDF; every payment has a Receipt.'],
+          ].map(([t, d]) => (
+            <li key={t} className="card p-3"><div className="font-medium text-ink text-sm">{t}</div><div className="text-xs text-muted mt-0.5">{d}</div></li>
+          ))}
+        </ul>
       </Section>
 
       <Section n={2} title="How work flows">

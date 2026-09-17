@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { LEAD_STAGE_LABELS, MATERIAL_OWNERSHIP_LABELS, ORDER_CATEGORY_LABELS, PAYMENT_METHOD_LABELS } from '@ms/core';
 import { ShortcutKbd } from '@/components/shortcut-kbd';
+import { mailtoLink, whatsappLink } from '@/lib/outreach';
 import { MicButton } from './mic-button';
 import { ChangeList, DocPreview, type PreviewDocMeta } from './doc-preview';
 import { DocumentReviewModal } from './document-review';
@@ -37,12 +38,24 @@ type ActionPart = {
   /** What was saved (quotation / invoice / order / customer / lead) — picks the link wording. */
   entityType?: string;
 };
+/** A message the AI prepared for the user to send themselves (mirrors @ms/ai MessageDraft). */
+type MessageDraft = {
+  purpose: string;
+  recipient: { name: string; phone?: string; email?: string; kind: 'customer' | 'lead' | 'phone' };
+  text: string;
+  subject?: string;
+  whatsappUrl?: string;
+  mailtoUrl?: string;
+  pdfLink?: string;
+  documentLabel?: string;
+};
 type Part =
   | { kind: 'text'; text: string }
   | { kind: 'tool'; label: string; done: boolean }
   | { kind: 'table'; title: string; columns: string[]; rows: Cell[][] }
   | { kind: 'chart'; spec: ChartSpec }
   | ActionPart
+  | { kind: 'message'; message: MessageDraft }
   | { kind: 'nav'; label: string; path: string; newTab?: boolean };
 type Msg =
   | { role: 'user'; text: string; hidden?: boolean; files?: string[] }
@@ -293,9 +306,9 @@ function ChartPart({ spec }: { spec: ChartSpec }) {
 const PHASE_CHIP: Record<ActionPhase, { label: string; cls: string }> = {
   pending: { label: 'Needs your OK', cls: 'bg-accent-soft text-accent' },
   executing: { label: 'Saving…', cls: 'bg-accent-soft text-accent animate-pulse' },
-  executed: { label: '✓ Saved', cls: 'bg-[#e4f1ea] text-ok' },
+  executed: { label: '✓ Saved', cls: 'bg-ok-soft text-ok' },
   cancelled: { label: 'Not saved', cls: 'bg-surface-2 text-muted' },
-  failed: { label: 'Couldn’t save', cls: 'bg-[#f6e5e1] text-crit' },
+  failed: { label: 'Couldn’t save', cls: 'bg-crit-soft text-crit' },
 };
 
 // Totals the document preview already shows in its footer — don't repeat them.
@@ -344,13 +357,15 @@ function optionLabel(fieldKey: string, value: string): string {
 }
 
 function ActionCard({
-  part, busy, onDecide, onOpen, onReview,
+  part, busy, onDecide, onOpen, onReview, onAsk,
 }: {
   part: ActionPart;
   busy: boolean;
   onDecide: (actionId: string, decision: 'confirm' | 'cancel', edited?: Record<string, unknown>) => void;
   onOpen: (path: string) => void;
   onReview: (actionId: string) => void;
+  /** Send (or pre-fill) a follow-up question — the "what next" chips. */
+  onAsk: (question: string, fill?: boolean) => void;
 }) {
   const a = part.action;
   const chip = PHASE_CHIP[part.phase];
@@ -482,9 +497,85 @@ function ActionCard({
           )}
         </div>
       )}
+      {part.phase === 'executed' && !busy && nextSteps(part).length > 0 && (
+        <div className="px-3.5 pb-2.5 flex flex-wrap gap-1.5" aria-label="What next">
+          {nextSteps(part).map((s) => (
+            <button key={s.text} type="button" onClick={() => onAsk(s.text.replace(/^✎\s*/, ''), s.fill)}
+              className="text-xs px-2.5 py-1 min-h-11 sm:min-h-0 rounded-full border border-line bg-surface hover:border-accent/50 hover:bg-accent-soft/40 transition-colors">
+              {s.text}
+            </button>
+          ))}
+        </div>
+      )}
       {part.phase === 'failed' && part.result && (
         <div className="px-3.5 py-2.5 border-t border-line text-xs text-crit" role="alert">{part.result}</div>
       )}
+    </div>
+  );
+}
+
+// After something is saved, the obvious next moves — one tap each.
+const DOC_NO = /\b(QT|INV|SO)\/\d{2}-\d{2}\/\d{4}\b/;
+const QUOTED = /[“"]([^”"]+)[”"]/;
+function nextSteps(part: ActionPart): Suggestion[] {
+  const k = part.action.kind;
+  if (!(k.startsWith('create_') || k.startsWith('convert_') || k === 'duplicate_quotation')) return [];
+  const n = part.result?.match(DOC_NO)?.[0];
+  const name = part.result?.match(QUOTED)?.[1];
+  switch (part.entityType) {
+    case 'quotation': return n ? [ask(`Send quotation ${n} to the customer on WhatsApp`), ask(`Make an order from ${n}`)] : [];
+    case 'invoice': return n ? [ask(`Send bill ${n} to the customer on WhatsApp`), write(`Payment received on ${n}: ₹[amount] by [UPI / bank]`)] : [];
+    case 'order': return n ? [ask(`Make the bill for order ${n}`), ask(`Mark order ${n} as In production`)] : [];
+    case 'customer': return name ? [write(`Quotation for ${name}: [die] ₹[rate], [die] ₹[rate]`)] : [];
+    case 'lead': return name ? [write(`Add a call note to enquiry ${name}: [what was discussed]`), write(`Follow up on enquiry ${name} next [Monday]`)] : [];
+    default: return [];
+  }
+}
+
+/** A prepared message: editable text, WhatsApp / email / copy — the user sends it, the app never does. */
+function MessageCard({ message }: { message: MessageDraft }) {
+  const [text, setText] = useState(message.text);
+  const [copied, setCopied] = useState(false);
+  const wa = whatsappLink(message.recipient.phone, text);
+  const mail = mailtoLink(message.recipient.email, message.subject ?? '', text);
+  const who = [message.recipient.phone, message.recipient.email].filter(Boolean).join(' · ');
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch { /* clipboard blocked — user can select the text */ }
+  };
+  return (
+    <div className="border border-line rounded-xl bg-surface overflow-hidden shadow-sm">
+      <div className="px-3.5 py-2.5 flex items-center gap-2 border-b border-line bg-surface-2/60">
+        <span aria-hidden>✉</span>
+        <div className="flex-1 min-w-0">
+          <div className="text-sm font-medium truncate">Message for {message.recipient.name}</div>
+          <div className="text-xs text-muted truncate">{who || 'No phone or email on record'}</div>
+        </div>
+        <span className="pill bg-surface-2 text-muted shrink-0">Not sent yet</span>
+      </div>
+      <div className="px-3.5 py-2.5 space-y-2">
+        <textarea
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          rows={Math.min(10, Math.max(4, text.split('\n').length + 1))}
+          className="field text-sm leading-relaxed"
+          aria-label="Message text — you can change it before sending"
+        />
+        {message.documentLabel && (
+          <div className="text-xs text-muted">Includes a link to {message.documentLabel.split(' · ')[0]} that opens without a login (valid 60 days).</div>
+        )}
+        <div className="flex flex-wrap gap-2">
+          {wa && (
+            <a href={wa} target="_blank" rel="noopener noreferrer" className="btn text-xs bg-[#25D366] hover:bg-[#20bd5a] text-white">
+              Send on WhatsApp
+            </a>
+          )}
+          {mail && <a href={mail} className="btn-ghost text-xs">Send by email</a>}
+          <button type="button" onClick={copy} className="btn-ghost text-xs">{copied ? 'Copied ✓' : 'Copy text'}</button>
+        </div>
+        {!wa && !mail && (
+          <div className="text-xs text-warn">No phone or email on record — add one on their page, or copy the text and send it yourself.</div>
+        )}
+      </div>
     </div>
   );
 }
@@ -500,6 +591,7 @@ function serializeParts(parts: Part[]): string {
       return `[proposed action: ${p.action.title} → ${outcome}]`;
     }
     if (p.kind === 'nav') return `[opened ${p.label}]`;
+    if (p.kind === 'message') return `[prepared a ${p.message.purpose.replace(/_/g, ' ')} message for ${p.message.recipient.name} — shown on a card with WhatsApp / email / copy buttons; not sent by the app]`;
     return '';
   }).filter((s) => s.trim());
   return chunks.join('\n') || '…';
@@ -691,6 +783,8 @@ export function AssistantPanel({ enabled }: { enabled: boolean }) {
                 : m,
             ));
             patch((parts) => [...settleTools(parts), { kind: 'action', action, phase: 'pending' }]);
+          } else if (ev.type === 'message') {
+            patch((parts) => [...settleTools(parts), { kind: 'message', message: ev.message as MessageDraft }]);
           } else if (ev.type === 'nav') {
             const path = String(ev.path ?? '/dashboard');
             const label = String(ev.label ?? 'page');
@@ -849,7 +943,7 @@ export function AssistantPanel({ enabled }: { enabled: boolean }) {
 
   return (
     <>
-      {open && <div className="fixed inset-0 bg-ink/25 z-40" onClick={() => setOpen(false)} aria-hidden />}
+      {open && <div className="fixed inset-0 bg-scrim/25 z-40" onClick={() => setOpen(false)} aria-hidden />}
       <aside
         ref={asideRef}
         onKeyDown={onAsideKeyDown}
@@ -923,7 +1017,7 @@ export function AssistantPanel({ enabled }: { enabled: boolean }) {
                         ))}
                       </div>
                     )}
-                    <div className="bg-accent text-white text-sm px-3.5 py-2 rounded-2xl rounded-br-sm whitespace-pre-wrap">{m.text}</div>
+                    <div className="bg-accent text-on-accent text-sm px-3.5 py-2 rounded-2xl rounded-br-sm whitespace-pre-wrap">{m.text}</div>
                   </div>
                 </div>
               )
@@ -944,9 +1038,11 @@ export function AssistantPanel({ enabled }: { enabled: boolean }) {
                   if (p.kind === 'action') {
                     return (
                       <ActionCard key={p.action.actionId} part={p} busy={busy} onDecide={decide}
-                        onOpen={(path) => navigate(path)} onReview={(id) => setReview(id)} />
+                        onOpen={(path) => navigate(path)} onReview={(id) => setReview(id)}
+                        onAsk={(q, fill) => (fill ? fillInput(q) : send(q))} />
                     );
                   }
+                  if (p.kind === 'message') return <MessageCard key={j} message={p.message} />;
                   return p.newTab ? (
                     <a key={j} href={p.path} target="_blank" rel="noopener noreferrer"
                       className="inline-flex items-center gap-2 text-xs font-medium text-accent bg-accent-soft/50 border border-accent/40 rounded-full px-3 py-1 hover:bg-accent-soft transition-colors">

@@ -22,11 +22,11 @@ const TONE: Record<string, Tone> = {
 
 const CLS: Record<Tone, string> = {
   muted: 'bg-surface-2 text-muted',
-  steel: 'bg-[#e7eef5] text-steel',
-  warn: 'bg-[#f6efd9] text-warn',
-  ok: 'bg-[#e4f1ea] text-ok',
-  crit: 'bg-[#f6e6e2] text-crit',
-  dark: 'bg-[#dfe4ea] text-ink',
+  steel: 'bg-steel-soft text-steel',
+  warn: 'bg-warn-soft text-warn',
+  ok: 'bg-ok-soft text-ok',
+  crit: 'bg-crit-soft text-crit',
+  dark: 'bg-ink-soft text-ink',
 };
 
 export function StatusPill({ status, label, className = '' }: { status: string; label?: string; className?: string }) {

@@ -4,8 +4,10 @@ import { usePathname } from 'next/navigation';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { logoutAction } from '@/app/login/actions';
 import { AssistantPanel, openAssistant } from '@/components/assistant/assistant-panel';
+import { GlobalSearch } from '@/components/global-search';
 import { KeyboardShortcuts } from '@/components/keyboard-shortcuts';
 import { ShortcutKbd } from '@/components/shortcut-kbd';
+import { ThemeToggle } from '@/components/theme-toggle';
 import { NAV, NAV_GROUPS, navTitleFor, type NavKey } from '@/lib/nav-labels';
 
 // Re-exported so pages can name screens without importing the shell's internals.
@@ -128,6 +130,7 @@ export function AppShell({
     ...(canManageUsers ? [{ key: 'users' as const, icon: 'users' }] : []),
     ...(canManageChannels ? [{ key: 'channels' as const, icon: 'channels' }] : []),
     ...(canManageOutreach ? [{ key: 'outreach' as const, icon: 'chat' }] : []),
+    ...(canManageOutreach ? [{ key: 'ai' as const, icon: 'sparkle' }] : []),
   ];
 
   const nav: { group: string; items: NavItem[] }[] = [
@@ -166,13 +169,13 @@ export function AppShell({
     <div className="min-h-dvh md:grid md:grid-cols-[228px_1fr]">
       <a
         href="#main"
-        className="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-[100] focus:bg-accent focus:text-white focus:px-4 focus:py-2 focus:rounded"
+        className="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-[100] focus:bg-accent focus:text-on-accent focus:px-4 focus:py-2 focus:rounded"
       >
         Skip to content
       </a>
 
       {navOpen && (
-        <div className="fixed inset-0 bg-ink/25 z-40 md:hidden" onClick={() => setNavOpen(false)} aria-hidden />
+        <div className="fixed inset-0 bg-scrim/25 z-40 md:hidden" onClick={() => setNavOpen(false)} aria-hidden />
       )}
 
       <aside
@@ -228,7 +231,7 @@ export function AppShell({
                       <span className="flex-1">{label}</span>
                       {n.badge ? (
                         <span
-                          className="min-w-[1.25rem] px-1.5 py-0.5 rounded-full bg-accent text-white text-[0.65rem] font-semibold text-center leading-none"
+                          className="min-w-[1.25rem] px-1.5 py-0.5 rounded-full bg-accent text-on-accent text-[0.65rem] font-semibold text-center leading-none"
                           aria-label={`${n.badge} enquiries need review`}
                           title={`${n.badge} enquiries need review`}
                         >
@@ -248,6 +251,7 @@ export function AppShell({
             <div className="font-medium text-ink truncate">{user.name}</div>
             <div className="text-muted truncate">{user.email}</div>
           </div>
+          <div className="px-3 pb-2"><ThemeToggle /></div>
           <Link href={NAV.guide.href} className={bottomLink}><Icon name="help" /> {NAV.guide.label}</Link>
           <Link href={NAV.password.href} className={bottomLink}><Icon name="lock" /> {NAV.password.label}</Link>
           <div className="border-t border-line my-1" role="separator" />
@@ -273,15 +277,18 @@ export function AppShell({
             </button>
             <p className="text-sm font-medium text-ink truncate sm:pl-0 pl-1">{title}</p>
           </div>
-          <button
-            type="button"
-            onClick={() => openAssistant()}
-            className="min-h-[40px] flex items-center gap-2 text-xs font-medium text-accent border border-accent/40 bg-accent-soft/50 hover:bg-accent-soft rounded-lg px-3 py-1.5 transition-colors shrink-0"
-          >
-            <Icon name="sparkle" className="w-3.5 h-3.5" />
-            <span>Ask AI</span>
-            <ShortcutKbd className="hidden sm:inline-block" />
-          </button>
+          <div className="flex items-center gap-2 shrink-0">
+            <GlobalSearch />
+            <button
+              type="button"
+              onClick={() => openAssistant()}
+              className="min-h-[40px] flex items-center gap-2 text-xs font-medium text-accent border border-accent/40 bg-accent-soft/50 hover:bg-accent-soft rounded-lg px-3 py-1.5 transition-colors shrink-0"
+            >
+              <Icon name="sparkle" className="w-3.5 h-3.5" />
+              <span>Ask AI</span>
+              <ShortcutKbd className="hidden sm:inline-block" />
+            </button>
+          </div>
         </header>
         <main id="main" className="px-4 pt-4 pb-20 sm:px-6 sm:pt-6 md:pb-6 flex-1 min-w-0" tabIndex={-1}>{children}</main>
       </div>

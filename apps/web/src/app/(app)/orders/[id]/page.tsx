@@ -47,7 +47,7 @@ export default async function OrderDetail({
   return (
     <div className="max-w-4xl">
       {sp.locked && (
-        <div role="status" className="mb-4 rounded-lg border border-warn/40 bg-[#f6efdd]/60 px-4 py-3 text-sm text-ink">
+        <div role="status" className="mb-4 rounded-lg border border-warn/40 bg-warn-soft/60 px-4 py-3 text-sm text-ink">
           {sp.locked === 'bill' ? <>This order can’t be changed because a bill was already made from it. Change that bill instead.</> : sp.locked === 'cancelled' ? <>This order is cancelled, so it can’t be changed.</> : null}
         </div>
       )}

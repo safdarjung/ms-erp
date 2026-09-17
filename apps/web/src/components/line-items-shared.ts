@@ -239,3 +239,30 @@ export const rowFieldMessage = (r: LineRow, field: 'description' | 'qty'): strin
 
 /** True when a row will actually persist but has an invalid quantity. */
 export const rowQtyBad = (r: LineRow) => !!r.description.trim() && !(Number(r.qty) > 0);
+
+/** The bits of a past-line suggestion the editor copies into a row (the shape of
+ *  lib/price-history's ItemSuggestion, kept structural so this file stays import-free). */
+export type RowSuggestion = { description: string; hsn: string | null; uom: string; gstRate: number; lastRate: number };
+
+/**
+ * Fill a row from a past line the user picked: the description always; the
+ * rate only when the row has none yet (empty or 0); HSN / unit / GST % only
+ * while they still sit at the shop defaults — anything the user changed by
+ * hand stays. Returns a new row; the input is untouched.
+ */
+export function applySuggestionToRow(row: LineRow, s: RowSuggestion): LineRow {
+  const rateEmpty = row.rate.trim() === '' || Number(row.rate) === 0;
+  const hsnDefault = (row.hsn ?? '').trim() === DEFAULT_HSN;
+  const uomDefault = (row.uom ?? '').trim().toUpperCase() === DEFAULT_UOM;
+  const gstDefault = String(Number(row.gstRate)) === DEFAULT_GST;
+  const hsn = (s.hsn ?? '').trim();
+  const uom = (s.uom ?? '').trim();
+  return {
+    ...row,
+    description: s.description,
+    rate: rateEmpty && Number.isFinite(s.lastRate) ? String(s.lastRate) : row.rate,
+    hsn: hsnDefault && hsn ? hsn : row.hsn,
+    uom: uomDefault && uom ? uom : row.uom,
+    gstRate: gstDefault && Number.isFinite(s.gstRate) ? String(s.gstRate) : row.gstRate,
+  };
+}

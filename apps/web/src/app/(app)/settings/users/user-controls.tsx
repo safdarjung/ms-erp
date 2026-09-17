@@ -142,7 +142,7 @@ export function StatusToggle({ id, status, disabled }: { id: string; status: str
   const active = status === 'active';
   return (
     <div className="flex items-center gap-2 flex-wrap">
-      <span className={`pill ${active ? 'bg-[#e4f1ea] text-ok' : 'bg-[#f6e5e1] text-crit'}`}>{active ? 'Active' : 'Blocked'}</span>
+      <span className={`pill ${active ? 'bg-ok-soft text-ok' : 'bg-crit-soft text-crit'}`}>{active ? 'Active' : 'Blocked'}</span>
       {!disabled && (
         <form action={setUserStatusAction}>
           <input type="hidden" name="id" value={id} />

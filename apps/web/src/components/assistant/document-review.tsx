@@ -192,7 +192,7 @@ export function DocumentReviewModal({
     <div className="fixed inset-0 z-[70] flex items-stretch sm:items-center justify-center sm:p-6" role="dialog" aria-modal="true" aria-label={title}
       ref={dialogRef} onKeyDown={onKeyDown}>
       {/* On phones the sheet is full-screen, so a stray tap outside can't close it. */}
-      <div className="absolute inset-0 bg-ink/50" onClick={() => { if (window.matchMedia('(min-width: 640px)').matches) requestClose(); }} aria-hidden />
+      <div className="absolute inset-0 bg-scrim/50" onClick={() => { if (window.matchMedia('(min-width: 640px)').matches) requestClose(); }} aria-hidden />
       <div className="relative bg-bg w-full sm:max-w-5xl sm:rounded-xl shadow-2xl flex flex-col max-h-full sm:max-h-[94vh] overflow-hidden">
         <div className="flex flex-col flex-1 min-h-0" inert={askDiscard || undefined}>
           <header className="flex items-center gap-3 px-4 sm:px-5 min-h-14 border-b border-line bg-surface shrink-0">
@@ -239,7 +239,7 @@ export function DocumentReviewModal({
               </>
             )}
             {issues.length > 0 && (
-              <div className="rounded-lg border border-crit/40 bg-[#f6e5e1]/40 px-4 py-2.5 text-sm" role="alert">
+              <div className="rounded-lg border border-crit/40 bg-crit-soft/40 px-4 py-2.5 text-sm" role="alert">
                 <div className="font-medium text-crit mb-1">Fix {issues.length === 1 ? 'this' : 'these'} first:</div>
                 <ul className="list-disc pl-5 text-crit/90 space-y-0.5">{issues.map((iss, i) => <li key={i}>{iss.message}</li>)}</ul>
               </div>
@@ -259,7 +259,7 @@ export function DocumentReviewModal({
         </div>
 
         {askDiscard && (
-          <div className="absolute inset-0 z-10 bg-ink/40 flex items-center justify-center p-4" role="alertdialog" aria-modal="true" aria-labelledby="discard-title" data-discard>
+          <div className="absolute inset-0 z-10 bg-scrim/40 flex items-center justify-center p-4" role="alertdialog" aria-modal="true" aria-labelledby="discard-title" data-discard>
             <div className="card p-4 w-full max-w-sm space-y-3 shadow-xl">
               <div id="discard-title" className="font-semibold text-sm">Discard your changes?</div>
               <p className="text-xs text-muted">What you changed here will be lost. The card stays as it was — nothing is saved either way.</p>

@@ -19,6 +19,7 @@ import {
 import type {
   StageResult, StagedAction, StagedDocMeta, EditField, EditItem, GetDocumentInput, GetDocumentResult,
 } from '@ms/ai';
+import { ACTION_TOOLS } from '@ms/ai';
 import type { CurrentUser } from './auth';
 import {
   convertQuotationTx, convertQuotationToOrderTx, convertOrderToInvoiceTx,
@@ -1424,6 +1425,10 @@ async function performAction(tx: Tx, u: U, kind: string, payload: unknown): Prom
   }
 }
 
+// Permission per action kind — checked when the model proposes AND again here
+// when the user confirms, so a role change between the two can't slip through.
+const KIND_PERMISSION = new Map(ACTION_TOOLS.map((t) => [t.name, t.permission]));
+
 export async function executeAction(user: CurrentUser, actionId: string, edited?: Record<string, unknown>): Promise<ExecResult> {
   let performed: Performed;
   try {
@@ -1437,6 +1442,9 @@ export async function executeAction(user: CurrentUser, actionId: string, edited?
       const stale = 'This card has expired or was already used — ask again and I’ll make a fresh one.';
       if (!row) throw new Error(stale);
       if (row.expiresAt.getTime() < Date.now()) throw new Error(stale);
+      const needed = KIND_PERMISSION.get(row.kind);
+      if (needed === undefined) throw new Error('I can’t do that one yet.');
+      if (needed && !user.permissions.has(needed)) throw new Error('Your login no longer has access to do this — ask the owner.');
       let payload = row.payload;
       // The user edited the proposal on the card — re-validate their input through
       // the SAME staging pipeline (zod + business checks) before executing.

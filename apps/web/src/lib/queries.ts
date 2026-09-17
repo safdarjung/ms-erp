@@ -4,7 +4,7 @@ import {
   withTenant, customer, lead, leadActivity, quotation, quotationItem, salesOrder, orderItem,
   taxInvoice, taxInvoiceItem, payment, tenant,
   users, role, userRole, inboundMessage, leadChannel,
-  count, sql, desc, asc, eq, ne, or, ilike, and,
+  count, sql, desc, asc, eq, ne, or, ilike, and, type Tx,
 } from '@ms/db';
 import { parseLetterhead, paymentStatus, type Letterhead, type PaymentState } from '@ms/core';
 import { requireUser } from './rbac';
@@ -283,18 +283,21 @@ export async function listInvoices(opts: { q?: string; status?: string; page?: n
   });
 }
 
+/** A bill with its lines, customer, payments and letterhead — inside a tenant tx (no session needed). */
+export async function loadInvoiceTx(tx: Tx, id: string) {
+  const [invoice] = await tx.select().from(taxInvoice).where(eq(taxInvoice.id, id)).limit(1);
+  if (!invoice) return null;
+  const items = await tx.select().from(taxInvoiceItem).where(eq(taxInvoiceItem.invoiceId, id)).orderBy(taxInvoiceItem.seq);
+  const [cust] = await tx.select().from(customer).where(eq(customer.id, invoice.customerId)).limit(1);
+  const payments = await tx.select().from(payment).where(eq(payment.invoiceId, id)).orderBy(desc(payment.paidOn));
+  const [t] = await tx.select({ settings: tenant.settings }).from(tenant).limit(1);
+  const received = payments.reduce((s, p) => s + Number(p.amount), 0);
+  return { invoice, items, customer: cust ?? null, payments, received, letterhead: parseLetterhead(t?.settings) };
+}
+
 export async function getInvoice(id: string) {
   const u = await requireUser();
-  return withTenant(u.tenantId, u.userId, async (tx) => {
-    const [invoice] = await tx.select().from(taxInvoice).where(eq(taxInvoice.id, id)).limit(1);
-    if (!invoice) return null;
-    const items = await tx.select().from(taxInvoiceItem).where(eq(taxInvoiceItem.invoiceId, id)).orderBy(taxInvoiceItem.seq);
-    const [cust] = await tx.select().from(customer).where(eq(customer.id, invoice.customerId)).limit(1);
-    const payments = await tx.select().from(payment).where(eq(payment.invoiceId, id)).orderBy(desc(payment.paidOn));
-    const [t] = await tx.select({ settings: tenant.settings }).from(tenant).limit(1);
-    const received = payments.reduce((s, p) => s + Number(p.amount), 0);
-    return { invoice, items, customer: cust ?? null, payments, received, letterhead: parseLetterhead(t?.settings) };
-  });
+  return withTenant(u.tenantId, u.userId, (tx) => loadInvoiceTx(tx, id));
 }
 
 export async function getLetterhead(): Promise<Letterhead | null> {
@@ -329,16 +332,19 @@ export async function listQuotations(opts: { q?: string; status?: string; page?:
   });
 }
 
+/** A quotation with its lines, customer and letterhead — inside a tenant tx (no session needed). */
+export async function loadQuotationTx(tx: Tx, id: string) {
+  const [q] = await tx.select().from(quotation).where(eq(quotation.id, id)).limit(1);
+  if (!q) return null;
+  const items = await tx.select().from(quotationItem).where(eq(quotationItem.quotationId, id)).orderBy(quotationItem.seq);
+  const [cust] = await tx.select().from(customer).where(eq(customer.id, q.customerId)).limit(1);
+  const [t] = await tx.select({ settings: tenant.settings }).from(tenant).limit(1);
+  return { quotation: q, items, customer: cust ?? null, letterhead: parseLetterhead(t?.settings) };
+}
+
 export async function getQuotation(id: string) {
   const u = await requireUser();
-  return withTenant(u.tenantId, u.userId, async (tx) => {
-    const [q] = await tx.select().from(quotation).where(eq(quotation.id, id)).limit(1);
-    if (!q) return null;
-    const items = await tx.select().from(quotationItem).where(eq(quotationItem.quotationId, id)).orderBy(quotationItem.seq);
-    const [cust] = await tx.select().from(customer).where(eq(customer.id, q.customerId)).limit(1);
-    const [t] = await tx.select({ settings: tenant.settings }).from(tenant).limit(1);
-    return { quotation: q, items, customer: cust ?? null, letterhead: parseLetterhead(t?.settings) };
-  });
+  return withTenant(u.tenantId, u.userId, (tx) => loadQuotationTx(tx, id));
 }
 
 export type AnalyticsData = Awaited<ReturnType<typeof analyticsData>>;
@@ -513,6 +519,9 @@ export async function listUsersWithRoles() {
 
 export type DashboardData = Awaited<ReturnType<typeof dashboardData>>;
 
+/** A quotation marked "sent" this many days ago with no answer counts as waiting. */
+export const STALE_QUOTE_DAYS = 5;
+
 /** Everything the dashboard needs, in one tenant transaction. */
 export async function dashboardData() {
   const u = await requireUser();
@@ -586,6 +595,41 @@ export async function dashboardData() {
       .where(sql`${lead.nextFollowupAt} is not null and ${lead.nextFollowupAt} <= now() and ${lead.stage} not in ('won','lost')`)
       .orderBy(asc(lead.nextFollowupAt)).limit(6);
 
+    // Quotations sent 5+ days ago with no answer — the ones to chase, with the
+    // phone so the dashboard can offer a one-tap WhatsApp follow-up.
+    const staleSince = new Date(now.getTime() - STALE_QUOTE_DAYS * 86_400_000).toISOString();
+    const staleQuotes = await tx.select({
+      id: quotation.id, number: quotation.number, docDate: quotation.docDate, sentAt: quotation.updatedAt,
+      grandTotal: quotation.grandTotal, customerId: quotation.customerId, customerName: customer.name, phone: customer.phone,
+    }).from(quotation).leftJoin(customer, eq(quotation.customerId, customer.id))
+      .where(sql`${quotation.status} = 'sent' and ${quotation.updatedAt} < ${staleSince}`)
+      .orderBy(asc(quotation.updatedAt)).limit(6);
+
+    // Orders promised within a week (or already late) and still not delivered.
+    const weekAhead = new Date(now.getTime() + 7 * 86_400_000).toISOString();
+    const ordersDue = await tx.select({
+      id: salesOrder.id, number: salesOrder.number, deliveryDate: salesOrder.deliveryDate, status: salesOrder.status,
+      totalValue: salesOrder.totalValue, customerName: customer.name, phone: customer.phone,
+    }).from(salesOrder).leftJoin(customer, eq(salesOrder.customerId, customer.id))
+      .where(sql`${salesOrder.status} in ('open','in_progress') and ${salesOrder.deliveryDate} is not null and ${salesOrder.deliveryDate} < ${weekAhead}`)
+      .orderBy(asc(salesOrder.deliveryDate)).limit(6);
+
+    // Bills falling due within a week that still have money outstanding.
+    let dueSoonCount = 0, dueSoonTotal = 0;
+    for (const r of arRows) {
+      const ps = paymentStatus({ status: r.status, grandTotal: Number(r.grandTotal), received: Number(r.received), dueDate: r.dueDate });
+      if (ps.state !== 'unpaid' && ps.state !== 'partial') continue;
+      if (!r.dueDate || r.dueDate.getTime() > now.getTime() + 7 * 86_400_000) continue;
+      dueSoonCount += 1; dueSoonTotal += ps.outstanding;
+    }
+
+    const weekAgo = new Date(now.getTime() - 7 * 86_400_000).toISOString();
+    const [collected] = await tx.select({ v: sql<string>`coalesce(sum(${payment.amount}), 0)` })
+      .from(payment).where(sql`${payment.paidOn} >= ${monthStart}`);
+    const [newLeadsWeek] = await tx.select({ n: count() }).from(lead).where(sql`${lead.createdAt} >= ${weekAgo}`);
+    const [quotesSentWeek] = await tx.select({ n: count() }).from(quotation)
+      .where(sql`${quotation.status} in ('sent','approved','converted') and ${quotation.updatedAt} >= ${weekAgo}`);
+
     const recentQuotations = await tx.select({
       id: quotation.id, number: quotation.number, docDate: quotation.docDate,
       status: quotation.status, grandTotal: quotation.grandTotal, customerName: customer.name,
@@ -616,6 +660,14 @@ export async function dashboardData() {
       followupLeads,
       recentQuotations,
       recentInvoices,
+      staleQuotes: staleQuotes.map((q) => ({
+        ...q, days: Math.max(0, Math.floor((now.getTime() - q.sentAt.getTime()) / 86_400_000)),
+      })),
+      ordersDue: ordersDue.map((o) => ({ ...o, late: !!o.deliveryDate && o.deliveryDate.getTime() < now.getTime() })),
+      dueSoon: { n: dueSoonCount, total: Math.round(dueSoonTotal * 100) / 100 },
+      collectedThisMonth: Number(collected?.v ?? 0),
+      newEnquiriesThisWeek: Number(newLeadsWeek?.n ?? 0),
+      quotesSentThisWeek: Number(quotesSentWeek?.n ?? 0),
     };
   });
 }

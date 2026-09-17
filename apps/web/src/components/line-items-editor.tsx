@@ -3,8 +3,9 @@ import { Fragment, useEffect, useState, type Dispatch, type SetStateAction } fro
 import { formatINR, splitColumns, MAX_DOC_COLUMNS, type ColumnDef } from '@ms/core';
 import {
   DEFAULT_GST, DEFAULT_HSN, emptyRow, newColumn, uid, lineAmount, groupSubtotal, rowQtyBad, rowTaxDiffers,
-  rowIsFilled, rowFieldMessage, type LineRow, type ItemIssue,
+  rowIsFilled, rowFieldMessage, applySuggestionToRow, type LineRow, type ItemIssue,
 } from './line-items-shared';
+import { ItemSuggestBox } from './item-suggest';
 
 // Re-export the pure helpers so existing client imports from this module keep
 // working. Server components must import them from './line-items-shared' directly
@@ -50,10 +51,12 @@ type Undo = { rows: LineRow[]; at: number; label: string };
  * `splitColumns` decides when the user hasn't. HSN / unit / GST % stay tucked
  * away per row ("More") unless they differ from the shop defaults. Controlled —
  * the parent owns `rows` and `columns`. `showIssues` lets a form keep the editor
- * calm until the user has touched it or pressed Save.
+ * calm until the user has touched it or pressed Save. `suggest` (default on)
+ * autocompletes the description from past quotation / bill lines and fills the
+ * row's rate, HSN, unit and GST % from the pick.
  */
 export function LineItemsEditor({
-  rows, setRows, columns, setColumns, tooling = false, showIssues = true,
+  rows, setRows, columns, setColumns, tooling = false, showIssues = true, suggest = true,
 }: {
   rows: LineRow[];
   setRows: Dispatch<SetStateAction<LineRow[]>>;
@@ -61,6 +64,7 @@ export function LineItemsEditor({
   setColumns: Dispatch<SetStateAction<ColumnDef[]>>;
   tooling?: boolean;
   showIssues?: boolean;
+  suggest?: boolean;
 }) {
   const [taxOpen, setTaxOpen] = useState<Record<string, boolean>>({});
   const [expandAll, setExpandAll] = useState(false);
@@ -194,13 +198,18 @@ export function LineItemsEditor({
         <tr className={`border-b border-line ${last && !extras ? 'last:border-0' : ''} [&>td]:px-2 [&>td]:py-1.5 [&>td]:align-top`}>
           <td className="text-faint tabular-nums pt-3">{sn}</td>
           <td>
-            <input
-              id={`line-${r.rid}`} data-line={r.rid} data-field="description"
-              value={r.description} onChange={(e) => patch(r.rid, { description: e.target.value })}
-              className={`field !py-1 ${descMsg ? '!border-crit' : ''}`} placeholder={DESC_PLACEHOLDER}
-              aria-label={`Item / description, line ${sn}`} aria-invalid={descMsg ? true : undefined}
-              aria-describedby={descMsg ? `line-${r.rid}-desc-msg` : undefined}
-            />
+            <ItemSuggestBox value={r.description} enabled={suggest} onPick={(s) => patch(r.rid, applySuggestionToRow(r, s))}>
+              {(sp) => (
+                <input
+                  {...sp}
+                  id={`line-${r.rid}`} data-line={r.rid} data-field="description"
+                  value={r.description} onChange={(e) => patch(r.rid, { description: e.target.value })}
+                  className={`field !py-1 ${descMsg ? '!border-crit' : ''}`} placeholder={DESC_PLACEHOLDER}
+                  aria-label={`Item / description, line ${sn}`} aria-invalid={descMsg ? true : undefined}
+                  aria-describedby={descMsg ? `line-${r.rid}-desc-msg` : undefined}
+                />
+              )}
+            </ItemSuggestBox>
             {descMsg && <div id={`line-${r.rid}-desc-msg`} className="text-xs text-crit mt-0.5">{descMsg}</div>}
           </td>
           {tableCols.map((c) => (
@@ -237,7 +246,7 @@ export function LineItemsEditor({
             </button>
           </td>
           <td className="!py-0">
-            <button type="button" onClick={() => removeRow(r, sn)} className={`${ICON_BTN} text-crit hover:bg-[#f6e5e1]`}
+            <button type="button" onClick={() => removeRow(r, sn)} className={`${ICON_BTN} text-crit hover:bg-crit-soft`}
               aria-label={`Remove line ${sn}`} title="Remove this line">✕</button>
           </td>
         </tr>
@@ -274,7 +283,7 @@ export function LineItemsEditor({
                       aria-label={`Move ${named || 'this field'} earlier`} title="Move earlier">‹</button>
                     <button type="button" onClick={() => moveColumn(c.id, 1)} className={`${ICON_BTN} text-faint hover:text-ink`}
                       aria-label={`Move ${named || 'this field'} later`} title="Move later">›</button>
-                    <button type="button" onClick={() => removeColumn(c.id)} className={`${ICON_BTN} text-crit hover:bg-[#f6e5e1]`}
+                    <button type="button" onClick={() => removeColumn(c.id)} className={`${ICON_BTN} text-crit hover:bg-crit-soft`}
                       aria-label={`Remove field ${named}`.trim()} title="Remove this field">✕</button>
                   </span>
                   <span className="flex items-center gap-1.5 px-1 pb-0.5 text-xs text-muted">
@@ -353,7 +362,7 @@ export function LineItemsEditor({
             sn += 1;
             const n = sn;
             return (
-              <MobileRow key={r.rid} r={r} sn={n} columns={columns} tooling={tooling} showIssues={showIssues}
+              <MobileRow key={r.rid} r={r} sn={n} columns={columns} tooling={tooling} showIssues={showIssues} suggest={suggest}
                 taxOpen={isTaxOpen(r)} onTaxToggle={(o) => setRowTaxOpen(r.rid, o)}
                 patch={patch} patchAttr={patchAttr} onRemove={() => removeRow(r, n)} />
             );
@@ -458,11 +467,11 @@ function PartHeader({
         {confirming ? (
           <span role="alert" className="inline-flex flex-wrap items-center gap-2 text-xs text-crit basis-full sm:basis-auto">
             Remove {name} and its {count} {count === 1 ? 'die' : 'dies'}?
-            <button type="button" onClick={onRemove} className="btn text-xs bg-crit text-white !py-1">Remove</button>
+            <button type="button" onClick={onRemove} className="btn text-xs bg-crit text-on-accent !py-1">Remove</button>
             <button type="button" onClick={onKeep} className="btn-ghost text-xs !py-1">Keep</button>
           </span>
         ) : (
-          <button type="button" onClick={onAskRemove} className={`${ICON_BTN} text-crit hover:bg-[#f6e5e1]`}
+          <button type="button" onClick={onAskRemove} className={`${ICON_BTN} text-crit hover:bg-crit-soft`}
             aria-label={`Remove part ${label.trim()}`.trim()} title="Remove this part and its dies">✕</button>
         )}
         <span className={`text-xs text-muted ${compact ? 'basis-full flex justify-between items-center' : 'ml-auto'}`}>
@@ -498,9 +507,9 @@ function SpecFields({ r, sn, cols, patchAttr }: {
 }
 
 function MobileRow({
-  r, sn, columns, tooling, showIssues, taxOpen, onTaxToggle, patch, patchAttr, onRemove,
+  r, sn, columns, tooling, showIssues, suggest, taxOpen, onTaxToggle, patch, patchAttr, onRemove,
 }: {
-  r: LineRow; sn: number; columns: ColumnDef[]; tooling: boolean; showIssues: boolean;
+  r: LineRow; sn: number; columns: ColumnDef[]; tooling: boolean; showIssues: boolean; suggest: boolean;
   taxOpen: boolean; onTaxToggle: (open: boolean) => void;
   patch: (rid: string, p: Partial<LineRow>) => void;
   patchAttr: (rid: string, colId: string, val: string) => void;
@@ -512,13 +521,17 @@ function MobileRow({
     <div className="p-3 space-y-2">
       <div className="flex items-center justify-between">
         <span className="text-xs font-medium text-muted">Item {sn}</span>
-        <button type="button" onClick={onRemove} className={`${ICON_BTN} text-crit hover:bg-[#f6e5e1] -mr-2`} aria-label={`Remove line ${sn}`} title="Remove this line">✕</button>
+        <button type="button" onClick={onRemove} className={`${ICON_BTN} text-crit hover:bg-crit-soft -mr-2`} aria-label={`Remove line ${sn}`} title="Remove this line">✕</button>
       </div>
       <label className="label !mb-0.5">Item / description
-        <input id={`line-${r.rid}-m`} data-line={r.rid} data-field="description" value={r.description}
-          onChange={(e) => patch(r.rid, { description: e.target.value })}
-          className={`field mt-0.5 ${descMsg ? '!border-crit' : ''}`} placeholder={DESC_PLACEHOLDER}
-          aria-invalid={descMsg ? true : undefined} aria-describedby={descMsg ? `line-${r.rid}-m-desc-msg` : undefined} />
+        <ItemSuggestBox value={r.description} enabled={suggest} onPick={(s) => patch(r.rid, applySuggestionToRow(r, s))}>
+          {(sp) => (
+            <input {...sp} id={`line-${r.rid}-m`} data-line={r.rid} data-field="description" value={r.description}
+              onChange={(e) => patch(r.rid, { description: e.target.value })}
+              className={`field mt-0.5 ${descMsg ? '!border-crit' : ''}`} placeholder={DESC_PLACEHOLDER}
+              aria-invalid={descMsg ? true : undefined} aria-describedby={descMsg ? `line-${r.rid}-m-desc-msg` : undefined} />
+          )}
+        </ItemSuggestBox>
       </label>
       {descMsg && <div id={`line-${r.rid}-m-desc-msg`} className="text-xs text-crit -mt-1">{descMsg}</div>}
       {columns.length > 0 && (

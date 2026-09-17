@@ -40,7 +40,7 @@ export function DocumentSavedStrip({
 
   if (!next) return null;
   return (
-    <div role="status" className="mb-4 flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-3 rounded-lg border border-ok/40 bg-[#e4f1ea]/60 px-4 py-3 text-sm">
+    <div role="status" className="mb-4 flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-3 rounded-lg border border-ok/40 bg-ok-soft/60 px-4 py-3 text-sm">
       <span className="sm:flex-1 min-w-0">
         {justSaved && <b className="text-ok">{docLabel} {number} saved. </b>}
         {next}

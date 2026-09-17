@@ -4,6 +4,8 @@
 // eyeballed: several parts, several items per part, and rich per-item specs.
 import { writeFileSync } from 'node:fs';
 import { renderDocumentHTML, buildTaxLines, type DocumentData } from './document-template';
+import { renderStatementHTML, type StatementData } from './statement-template';
+import { renderReceiptHTML, type ReceiptData } from './receipt-template';
 
 const COMPANY: DocumentData['company'] = {
   name: 'M.S. ENTERPRISES',
@@ -167,7 +169,48 @@ const QUOTATION: DocumentData = {
   notes: 'Rates are for tool manufacture only. Steel is our scope unless stated otherwise.',
 };
 
+// ── Statement of account: prior-year opening balance, a bill and its part
+// payment on the same day, an advance at the end, and something overdue. ─────
+const STATEMENT: StatementData = {
+  company: COMPANY,
+  customer: {
+    name: BUYER.name, addressLines: BUYER.addressLines, gstin: BUYER.gstin, stateLabel: BUYER.stateLabel,
+    phone: '+91 98300 12345',
+  },
+  period: { from: '1 Apr 2026', to: '16 Sep 2026' },
+  generatedOn: '16 Sep 2026',
+  opening: 12500,
+  rows: [
+    { date: '5 Apr 2026', particulars: 'Payment received · Bank transfer (NEFT / RTGS / IMPS) · ref N123456789', against: 'INV/25-26/0740', debit: 0, credit: 12500, balance: 0 },
+    { date: '1 Jul 2026', particulars: 'Bill INV/26-27/0781 · PO CR/PO/2231', debit: 35069.6, credit: 0, balance: 35069.6 },
+    { date: '1 Jul 2026', particulars: 'Payment received · UPI · ref 6198822', against: 'INV/26-27/0781', debit: 0, credit: 17500, balance: 17569.6 },
+    { date: '12 Aug 2026', particulars: 'Bill INV/26-27/0803', debit: 8260, credit: 0, balance: 25829.6 },
+    { date: '2 Sep 2026', particulars: 'Payment received · Cheque · ref 004512', against: 'INV/26-27/0781', debit: 0, credit: 17569.6, balance: 8260 },
+  ],
+  closing: 8260,
+  totals: { debit: 43329.6, credit: 47569.6 },
+  closingWords: 'Eight Thousand Two Hundred Sixty Rupees Only',
+  aging: { current: 0, d30: 8260, d60: 0, d60plus: 0, total: 8260 },
+  billCount: 3,
+};
+// ── Payment receipt: a part payment by cheque against the July bill. ────────
+const RECEIPT: ReceiptData = {
+  company: COMPANY,
+  receiptNo: 'RCPT/20260902/7F3A91C2',
+  date: '2 Sep 2026',
+  receivedFrom: { name: BUYER.name, addressLines: BUYER.addressLines, gstin: BUYER.gstin, phone: '+91 98300 12345' },
+  amount: 17569.6,
+  amountWords: 'Seventeen Thousand Five Hundred Sixty Nine Rupees and Sixty Paise Only',
+  methodLabel: 'Cheque',
+  reference: '004512 · PNB Kolkata',
+  notes: 'Final payment against the 16-cavity rubber die.',
+  subjectToRealisation: true,
+  bill: { number: 'INV/26-27/0781', date: '1 Jul 2026', total: 35069.6, receivedUpTo: 35069.6, balanceAfter: 0 },
+};
+
 const outdir = process.argv[2] ?? '/tmp';
 writeFileSync(`${outdir}/ms-invoice.html`, renderDocumentHTML(INVOICE));
 writeFileSync(`${outdir}/ms-quotation.html`, renderDocumentHTML(QUOTATION));
-console.log(`wrote ${outdir}/ms-invoice.html and ${outdir}/ms-quotation.html`);
+writeFileSync(`${outdir}/ms-statement.html`, renderStatementHTML(STATEMENT));
+writeFileSync(`${outdir}/ms-receipt.html`, renderReceiptHTML(RECEIPT));
+console.log(`wrote ${outdir}/ms-{invoice,quotation,statement,receipt}.html`);

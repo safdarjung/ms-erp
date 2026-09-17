@@ -5,6 +5,8 @@ import { getInvoice } from '@/lib/queries';
 import { requireUser, can } from '@/lib/rbac';
 import { formatDate } from '@/lib/format';
 import { normalizeWaNumber } from '@/lib/outreach';
+import { appBaseUrl, sharePath } from '@/lib/share';
+import { AskAiLink } from '@/components/app-shell';
 import { StatusPill } from '@/components/status-pill';
 import { DocumentItemsTable } from '@/components/document-items-table';
 import { ConfirmButton } from '@/components/confirm-button';
@@ -41,7 +43,10 @@ export default async function InvoiceDetail({
   const clearKeys = sp.created === '1' ? ['invoice:new'] : sp.saved ? [`invoice:${inv.id}`] : [];
   const sup = stateName(letterhead?.stateCode ?? '06');
   const pdfHref = `/print/invoice/${inv.id}?print=1`;
-  const waHref = waLink(cust?.phone, `Bill ${inv.number} for ${formatINR(grand)} — PDF attached.`);
+  // Public link the customer can open without a login (signed, expires).
+  const shareHref = cancelled ? null : `${appBaseUrl()}${sharePath('invoice', inv.id, user.tenantId)}`;
+  const waHref = shareHref ? waLink(cust?.phone,
+    `Namaste${cust?.contactPerson ? ` ${cust.contactPerson}` : ''}, please find our bill ${inv.number} for ${formatINR(grand)} (incl. GST)${inv.dueDate ? `, due ${formatDate(inv.dueDate)}` : ''}: ${shareHref}\n— Team M.S. Enterprises`) : null;
   const gstRates = new Set(items.map((it) => Number(it.gstRate)));
   const oneRate = gstRates.size === 1 ? [...gstRates][0] : null;
   const mono = 'tabular-nums font-mono';
@@ -49,7 +54,7 @@ export default async function InvoiceDetail({
   return (
     <div className="max-w-4xl">
       {sp.locked && (
-        <div role="status" className="mb-4 rounded-lg border border-warn/40 bg-[#f6efdd]/60 px-4 py-3 text-sm text-ink">
+        <div role="status" className="mb-4 rounded-lg border border-warn/40 bg-warn-soft/60 px-4 py-3 text-sm text-ink">
           {sp.locked === 'cancelled' ? <>This bill is cancelled, so it can’t be changed. Make a new bill if you need to charge again.</> : null}
         </div>
       )}
@@ -134,7 +139,12 @@ export default async function InvoiceDetail({
       </div>
 
       <div className="mt-6 flex items-center justify-between gap-3 flex-wrap">
-        <Link href="/invoices" className="text-steel text-sm hover:underline">← Bills</Link>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+          <Link href="/invoices" className="text-steel text-sm hover:underline">← Bills</Link>
+          {!cancelled && ps.outstanding > 0.5 && (
+            <AskAiLink question={`Write a polite payment reminder for bill ${inv.number} (${formatINR(ps.outstanding)} still due) to send on WhatsApp`} className="text-xs text-accent hover:underline">✦ Payment reminder message</AskAiLink>
+          )}
+        </div>
         {canEdit && inv.status === 'issued' && (
           <ConfirmButton
             action={cancelInvoiceAction}

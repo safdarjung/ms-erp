@@ -6,7 +6,7 @@ import { NAV, type NavKey } from '@/lib/nav-labels';
 
 // Keyboard shortcuts for people at a desk. Pure client, no deps. Ignored while
 // typing in a field or when a drawer/dialog is open, so it never fights input.
-//   /        jump to the search box
+//   /        jump to the search box (this list's, else the header's global one)
 //   g then … go to a page (see JUMP)
 //   n        new quotation / order / bill on that list
 //   ?        show or hide this help
@@ -38,6 +38,11 @@ function isTypingTarget(el: EventTarget | null): boolean {
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || t.isContentEditable;
 }
 
+/** On screen right now — false for display:none (e.g. the header box below `sm`). */
+function isVisible(el: HTMLElement): boolean {
+  return el.offsetParent !== null || el.getClientRects().length > 0;
+}
+
 /**
  * True only when a dialog is actually on screen. The assistant drawer stays in
  * the DOM with role="dialog" while closed (display:none), so a bare selector
@@ -46,9 +51,20 @@ function isTypingTarget(el: EventTarget | null): boolean {
 function modalOpen(): boolean {
   const dialogs = document.querySelectorAll<HTMLElement>('[aria-modal="true"], [role="dialog"]');
   for (const el of dialogs) {
-    if (el.offsetParent !== null || el.getClientRects().length > 0) return true;
+    if (isVisible(el)) return true;
   }
   return false;
+}
+
+/**
+ * The box "/" should land in: the list page's own search box when it is on
+ * screen, otherwise the header's global box. Null on phones, where the header
+ * box is hidden — the caller opens the search page instead.
+ */
+function searchBox(): HTMLInputElement | null {
+  const local = document.querySelector<HTMLInputElement>('#main input[type="search"], #main input[name="q"]');
+  const global = document.querySelector<HTMLInputElement>('input[data-global-search]');
+  return [local, global].find((el): el is HTMLInputElement => el !== null && isVisible(el)) ?? null;
 }
 
 export function KeyboardShortcuts() {
@@ -83,8 +99,9 @@ export function KeyboardShortcuts() {
 
       switch (e.key) {
         case '/': {
-          const input = document.querySelector('input[type="search"], input[name="q"]') as HTMLInputElement | null;
-          if (input) { e.preventDefault(); input.focus(); input.select(); }
+          e.preventDefault();
+          const box = searchBox();
+          if (box) { box.focus(); box.select(); } else router.push('/search');
           break;
         }
         case '?':
@@ -129,7 +146,7 @@ export function KeyboardShortcuts() {
   if (!help) return null;
 
   const rows: [React.ReactNode, string][] = [
-    [<kbd key="s" className="kbd">/</kbd>, 'Jump to the search box'],
+    [<kbd key="s" className="kbd">/</kbd>, 'Search (this list, or everything)'],
     [<kbd key="n" className="kbd">n</kbd>, 'Start a new quotation, order or bill (on that page)'],
     [<ShortcutKbd key="k" />, 'Ask AI'],
     [<kbd key="h" className="kbd">?</kbd>, 'Show or hide this list'],
@@ -137,7 +154,7 @@ export function KeyboardShortcuts() {
 
   return (
     <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-ink/25 p-4"
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-scrim/25 p-4"
       onClick={() => setHelp(false)}
     >
       <div

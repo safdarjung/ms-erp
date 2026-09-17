@@ -19,7 +19,7 @@ export function ConfirmButton({
   action,
   fields = {},
   children,
-  className = 'btn-ghost text-xs !text-crit !border-crit/40 hover:!bg-[#f6e5e1]',
+  className = 'btn-ghost text-xs !text-crit !border-crit/40 hover:!bg-crit-soft',
   title = 'Are you sure?',
   body,
   confirmLabel = 'Yes, do it',
@@ -88,7 +88,7 @@ export function ConfirmButton({
       <button ref={triggerRef} type="button" className={className} onClick={() => setOpen(true)}>{children}</button>
       {open && (
         <div className="fixed inset-0 z-[90] flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-ink/40" onClick={() => !pending && setOpen(false)} aria-hidden />
+          <div className="absolute inset-0 bg-scrim/40" onClick={() => !pending && setOpen(false)} aria-hidden />
           <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby={body ? 'confirm-body' : undefined}
             className="relative card w-full max-w-sm p-5 shadow-2xl toast-in">
             <div id="confirm-title" className="font-semibold text-ink mb-1">{title}</div>
@@ -101,7 +101,7 @@ export function ConfirmButton({
                 type="submit"
                 disabled={pending}
                 aria-busy={pending}
-                className={`btn text-sm text-white disabled:opacity-60 ${variant === 'danger' ? 'bg-crit hover:opacity-90' : 'bg-accent hover:opacity-90'}`}
+                className={`btn text-sm text-on-accent disabled:opacity-60 ${variant === 'danger' ? 'bg-crit hover:opacity-90' : 'bg-accent hover:opacity-90'}`}
               >
                 {pending ? pendingLabel : confirmLabel}
               </button>

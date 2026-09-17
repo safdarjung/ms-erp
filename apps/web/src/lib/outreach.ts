@@ -59,3 +59,35 @@ export function buildPaymentReminderLink(opts: {
     `${opts.companyNumber || DEFAULT_WHATSAPP_NUMBER}. Thank you. — Team M.S. Enterprises`;
   return `https://wa.me/${to}?text=${encodeURIComponent(text)}`;
 }
+
+/** wa.me deep link for any message text (null when the phone is unusable). */
+export function whatsappLink(phone: string | null | undefined, text: string): string | null {
+  const to = normalizeWaNumber(phone);
+  return to ? `https://wa.me/${to}?text=${encodeURIComponent(text)}` : null;
+}
+
+/** mailto: link with subject + body (null when there is no email). */
+export function mailtoLink(email: string | null | undefined, subject: string, body: string): string | null {
+  const to = (email ?? '').trim();
+  if (!to || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) return null;
+  return `mailto:${to}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+}
+
+/** A polite "did you get a chance to look at our quotation?" wa.me link. */
+export function buildQuoteFollowupLink(opts: {
+  phone?: string | null;
+  customerName?: string | null;
+  quotationNumber: string;
+  total: number;
+  pdfLink?: string | null;
+  companyNumber?: string;
+}): string | null {
+  const amount = new Intl.NumberFormat('en-IN', { maximumFractionDigits: 2 }).format(opts.total);
+  const name = (opts.customerName ?? '').trim() || 'Sir/Madam';
+  const text =
+    `Namaste ${name}, this is M/s M.S. Enterprises. Did you get a chance to look at our quotation ${opts.quotationNumber} ` +
+    `for ₹${amount}?${opts.pdfLink ? ` You can open it here: ${opts.pdfLink}` : ''} ` +
+    `Happy to discuss the rates, delivery or any change you need — reply here or call ${opts.companyNumber || DEFAULT_WHATSAPP_NUMBER}. ` +
+    `Thank you. — Team M.S. Enterprises`;
+  return whatsappLink(opts.phone, text);
+}

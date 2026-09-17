@@ -93,7 +93,7 @@ export function TotalsCard({ totals, gstRates, interstate, hasCustomer, supplier
 export function IssuesBox({ issues }: { issues: ItemIssue[] }) {
   if (!issues.length) return null;
   return (
-    <div role="alert" className="rounded-lg border border-crit/40 bg-[#f6e5e1]/40 px-4 py-2.5 text-sm">
+    <div role="alert" className="rounded-lg border border-crit/40 bg-crit-soft/40 px-4 py-2.5 text-sm">
       <div className="font-medium text-crit mb-1">Please fix {issues.length === 1 ? 'this' : 'these'} before saving:</div>
       <ul className="list-disc pl-5 text-crit/90 space-y-0.5">
         {issues.map((iss, i) => (
@@ -107,7 +107,7 @@ export function IssuesBox({ issues }: { issues: ItemIssue[] }) {
 export function WarningsBox({ warnings, acknowledged }: { warnings: ItemIssue[]; acknowledged: boolean }) {
   if (!warnings.length) return null;
   return (
-    <div role="status" className="rounded-lg border border-warn/40 bg-[#f6efd9]/50 px-4 py-2.5 text-sm">
+    <div role="status" className="rounded-lg border border-warn/40 bg-warn-soft/50 px-4 py-2.5 text-sm">
       <div className="font-medium text-warn mb-1">Please check — you can still save:</div>
       <ul className="list-disc pl-5 text-ink/80 space-y-0.5">
         {warnings.map((w, i) => (
@@ -122,7 +122,7 @@ export function WarningsBox({ warnings, acknowledged }: { warnings: ItemIssue[];
 export function ServerError({ message }: { message?: string }) {
   if (!message) return null;
   return (
-    <div role="alert" className="rounded-lg border border-crit/50 bg-[#f6e5e1]/60 px-4 py-2.5 text-sm text-crit">
+    <div role="alert" className="rounded-lg border border-crit/50 bg-crit-soft/60 px-4 py-2.5 text-sm text-crit">
       <b>Couldn&apos;t save:</b> {message} <span className="text-crit/70">— your entries are still here; fix and try again.</span>
     </div>
   );

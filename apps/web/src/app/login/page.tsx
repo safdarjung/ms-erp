@@ -36,26 +36,29 @@ function LoginScreen({ next }: { next: string }) {
 
   return (
     <div className="min-h-screen grid lg:grid-cols-2">
-      <div className="hidden lg:flex flex-col justify-between p-10 bg-ink text-white">
+      {/* Brand panel: inverted (ink on the page) by day; at night a plain surface with a
+          divider — the one place tokens alone cannot express "always dark". Gold, not the
+          brown accent, keeps the eyebrow text ≥7:1 on the navy. */}
+      <div className="hidden lg:flex flex-col justify-between p-10 bg-ink text-bg dark:bg-surface dark:text-ink dark:border-r dark:border-line">
         <div className="flex items-center gap-2.5">
-          <span className="text-accent text-2xl leading-none" aria-hidden>⚙</span>
+          <span className="text-gold dark:text-accent text-2xl leading-none" aria-hidden>⚙</span>
           <span className="font-semibold text-lg tracking-tight">MS Enterprises</span>
         </div>
         <div>
-          <p className="text-xs text-accent font-medium mb-3">Dies, tooling & machining — Faridabad</p>
+          <p className="text-xs text-gold dark:text-accent font-medium mb-3">Dies, tooling & machining — Faridabad</p>
           <p className="text-3xl font-semibold tracking-tight leading-snug mb-8 max-w-md">
             Enquiries, quotations, orders, bills and payments — in one place, on your phone.
           </p>
           <dl className="space-y-4 max-w-sm">
             {FEATURES.map(([t, d]) => (
-              <div key={t} className="border-l-2 border-accent/60 pl-4">
+              <div key={t} className="border-l-2 border-gold/60 dark:border-accent/60 pl-4">
                 <dt className="text-sm font-medium">{t}</dt>
-                <dd className="text-xs text-white/70">{d}</dd>
+                <dd className="text-xs text-bg/70 dark:text-muted">{d}</dd>
               </div>
             ))}
           </dl>
         </div>
-        <p className="text-xs text-white/60">Works on your phone — install it like an app.</p>
+        <p className="text-xs text-bg/60 dark:text-faint">Works on your phone — install it like an app.</p>
       </div>
 
       <div className="grid place-items-center p-6">

@@ -5,6 +5,8 @@ import { getQuotation } from '@/lib/queries';
 import { requireUser, can } from '@/lib/rbac';
 import { formatDate } from '@/lib/format';
 import { normalizeWaNumber } from '@/lib/outreach';
+import { appBaseUrl, sharePath } from '@/lib/share';
+import { AskAiLink } from '@/components/app-shell';
 import { StatusPill } from '@/components/status-pill';
 import { DocumentItemsTable } from '@/components/document-items-table';
 import { ConfirmButton } from '@/components/confirm-button';
@@ -41,7 +43,11 @@ export default async function QuotationDetail({
   const clearKeys = sp.created === '1' ? ['quotation:new'] : sp.saved ? [`quotation:${q.id}`] : [];
   const sup = stateName(letterhead?.stateCode ?? '06');
   const pdfHref = `/print/quotation/${q.id}?print=1`;
-  const waHref = waLink(cust?.phone, `Quotation ${q.number} for ${formatINR(q.grandTotal)} — PDF attached.`);
+  // Public link the customer can open without a login (signed, expires) — so
+  // "Share on WhatsApp" carries the actual document, not just its number.
+  const shareHref = `${appBaseUrl()}${sharePath('quotation', q.id, user.tenantId)}`;
+  const waHref = waLink(cust?.phone,
+    `Namaste${cust?.contactPerson ? ` ${cust.contactPerson}` : ''}, please find our quotation ${q.number} for ${formatINR(q.grandTotal)} (incl. GST): ${shareHref}\n— Team M.S. Enterprises`);
   const gstRates = new Set(items.map((it) => Number(it.gstRate)));
   const oneRate = gstRates.size === 1 ? [...gstRates][0] : null;
   const mono = 'tabular-nums font-mono';
@@ -49,7 +55,7 @@ export default async function QuotationDetail({
   return (
     <div className="max-w-4xl">
       {sp.locked && (
-        <div role="status" className="mb-4 rounded-lg border border-warn/40 bg-[#f6efdd]/60 px-4 py-3 text-sm text-ink">
+        <div role="status" className="mb-4 rounded-lg border border-warn/40 bg-warn-soft/60 px-4 py-3 text-sm text-ink">
           {sp.locked === 'bill' ? <>This quotation can’t be changed because a bill was already made from it. Change that bill instead, or use <b>Copy as new quotation</b>.</> : sp.locked === 'order' ? <>This quotation can’t be changed because the work was already ordered. Change that order instead, or use <b>Copy as new quotation</b>.</> : null}
         </div>
       )}
@@ -174,7 +180,12 @@ export default async function QuotationDetail({
         </div>
       </div>
 
-      <div className="mt-4"><Link href="/quotations" className="text-steel text-sm hover:underline">← Quotations</Link></div>
+      <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2">
+        <Link href="/quotations" className="text-steel text-sm hover:underline">← Quotations</Link>
+        <span className="text-xs text-muted">Ask AI:</span>
+        <AskAiLink question={`Write a WhatsApp follow-up for quotation ${q.number} asking if they have looked at it`} className="text-xs text-accent hover:underline">✦ Follow-up message</AskAiLink>
+        <AskAiLink question={`What did we charge other customers for the items in this quotation before?`} className="text-xs text-accent hover:underline">✦ Past rates for these items</AskAiLink>
+      </div>
     </div>
   );
 }

@@ -65,7 +65,12 @@ git branch -M main && git push -u origin main
    | `GEMINI_API_KEY` | key from aistudio.google.com — enables the AI agent (assistant + actions), quotation drafting & terms polish |
    | `ANTHROPIC_API_KEY` | *(alternative/additional)* key from console.anthropic.com — if both are set, Claude wins unless `AI_PROVIDER=gemini` |
 
+   | `APP_URL` | *(optional)* the app's public origin, e.g. `https://erp.example.com` — used to build the public share links inside WhatsApp/email messages. Falls back to Vercel's production URL, then to the request's host. |
+
    Both AI keys blank = AI off; everything else works normally.
+
+   **After every deploy that ships a new migration** (the latest is `0009_panoramic_corsair` — the `ai_briefing` table behind the home-screen briefing), run the migration against the 5432/direct URL:
+   `DATABASE_URL="<direct url>" DATABASE_URL_ADMIN="<direct url>" pnpm --filter @ms/db run setup` (idempotent; it also re-applies RLS + grants). Until it runs, the briefing card simply stays hidden — nothing else depends on it.
 
 5. **Deploy.** Open the Vercel URL → log in with **owner@msenterprises.test / password123**.
 

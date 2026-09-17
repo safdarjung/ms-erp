@@ -2,23 +2,130 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ---------------------------------------------------------------------------
+   Design tokens
+   Every colour is stored as an "R G B" channel triplet (--x-rgb) so Tailwind
+   can add opacity to it: bg-ink/40 → rgb(var(--ink-rgb) / 0.4). (A plain
+   var(--x) colour cannot take a /NN modifier — Tailwind drops the class.)
+   The ready-made colour (--x) is composed from the triplet for plain CSS and
+   inline styles.
+
+   Light is the default. The dark palette applies when the phone / PC prefers
+   dark (unless the person chose Light) or when they chose Dark — the choice
+   is `data-theme` on <html>, written by components/theme-toggle.tsx and
+   restored before first paint by the inline script in app/layout.tsx.
+   --------------------------------------------------------------------------- */
 :root {
-  --bg: #eaeef2;
-  --surface: #ffffff;
-  --surface-2: #f3f6f9;
-  --ink: #141a21;
-  --muted: #55606d;
+  /* Native controls (selects, date pickers, scrollbars) follow OUR resolved
+     theme, so a person who forced Light on a dark phone gets light widgets. */
+  color-scheme: light;
+
+  --bg-rgb: 234 238 242;          /* #eaeef2 page background */
+  --surface-rgb: 255 255 255;     /* #ffffff cards, fields */
+  --surface-2-rgb: 243 246 249;   /* #f3f6f9 table heads, wells */
+  --ink-rgb: 20 26 33;            /* #141a21 body text */
+  --muted-rgb: 85 96 109;         /* #55606d secondary text */
   /* ≥4.5:1 on white — placeholders and hints must stay readable in daylight */
-  --faint: #5f6975;
-  --line: #dce3ea;
-  --line-strong: #c2ccd6;
+  --faint-rgb: 95 105 117;        /* #5f6975 */
+  --line-rgb: 220 227 234;        /* #dce3ea */
+  --line-strong-rgb: 194 204 214; /* #c2ccd6 */
   /* ≥5:1 on the page background and on accent-soft (active nav item) */
-  --accent: #8f4f0f;
-  --accent-soft: #f5ead9;
-  --steel: #2e5c86;
-  --ok: #2c7a56;
-  --warn: #8f6714;
-  --crit: #b23f2c;
+  --accent-rgb: 143 79 15;        /* #8f4f0f */
+  --accent-soft-rgb: 245 234 217; /* #f5ead9 */
+  --steel-rgb: 46 92 134;         /* #2e5c86 */
+  --ok-rgb: 44 122 86;            /* #2c7a56 */
+  --warn-rgb: 143 103 20;         /* #8f6714 */
+  --crit-rgb: 178 63 44;          /* #b23f2c */
+  /* Tints for pills and notice boxes — each keeps its text colour ≥4.5:1 */
+  --ok-soft-rgb: 230 242 236;     /* #e6f2ec */
+  --warn-soft-rgb: 247 241 221;   /* #f7f1dd */
+  --crit-soft-rgb: 246 230 226;   /* #f6e6e2 */
+  --steel-soft-rgb: 231 238 245;  /* #e7eef5 */
+  --ink-soft-rgb: 223 228 234;    /* #dfe4ea "finished" pill */
+  --gold-rgb: 201 161 59;         /* #c9a13b aging bar, brand text on dark */
+  --on-accent-rgb: 255 255 255;   /* #ffffff text on accent / ok / crit buttons */
+  --scrim-rgb: 20 26 33;          /* #141a21 dimming behind dialogs */
+
+  /* Composed colours — use these in plain CSS and inline styles. */
+  --bg: rgb(var(--bg-rgb));
+  --surface: rgb(var(--surface-rgb));
+  --surface-2: rgb(var(--surface-2-rgb));
+  --ink: rgb(var(--ink-rgb));
+  --muted: rgb(var(--muted-rgb));
+  --faint: rgb(var(--faint-rgb));
+  --line: rgb(var(--line-rgb));
+  --line-strong: rgb(var(--line-strong-rgb));
+  --accent: rgb(var(--accent-rgb));
+  --accent-soft: rgb(var(--accent-soft-rgb));
+  --steel: rgb(var(--steel-rgb));
+  --ok: rgb(var(--ok-rgb));
+  --warn: rgb(var(--warn-rgb));
+  --crit: rgb(var(--crit-rgb));
+  --ok-soft: rgb(var(--ok-soft-rgb));
+  --warn-soft: rgb(var(--warn-soft-rgb));
+  --crit-soft: rgb(var(--crit-soft-rgb));
+  --steel-soft: rgb(var(--steel-soft-rgb));
+  --ink-soft: rgb(var(--ink-soft-rgb));
+  --gold: rgb(var(--gold-rgb));
+  --on-accent: rgb(var(--on-accent-rgb));
+  --scrim: rgb(var(--scrim-rgb));
+}
+
+/* Dark palette — low-glare surfaces for night use; every text token keeps
+   ≥4.5:1 on bg / surface / surface-2 and on its own *-soft tint.
+   The two blocks below must stay identical: the first follows the phone's
+   setting, the second is the person's explicit "Dark" choice. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg-rgb: 15 20 24;             /* #0f1418 */
+    --surface-rgb: 22 28 34;        /* #161c22 */
+    --surface-2-rgb: 29 37 45;      /* #1d252d */
+    --ink-rgb: 232 237 242;         /* #e8edf2 */
+    --muted-rgb: 170 180 191;       /* #aab4bf */
+    --faint-rgb: 139 150 163;       /* #8b96a3 */
+    --line-rgb: 42 51 61;           /* #2a333d */
+    --line-strong-rgb: 58 69 82;    /* #3a4552 */
+    --accent-rgb: 226 164 104;      /* #e2a468 */
+    --accent-soft-rgb: 58 42 23;    /* #3a2a17 */
+    --steel-rgb: 143 184 224;       /* #8fb8e0 */
+    --ok-rgb: 127 207 164;          /* #7fcfa4 */
+    --warn-rgb: 224 189 106;        /* #e0bd6a */
+    --crit-rgb: 240 140 120;        /* #f08c78 */
+    --ok-soft-rgb: 22 49 38;        /* #163126 */
+    --warn-soft-rgb: 58 47 18;      /* #3a2f12 */
+    --crit-soft-rgb: 61 31 26;      /* #3d1f1a */
+    --steel-soft-rgb: 27 42 58;     /* #1b2a3a */
+    --ink-soft-rgb: 42 51 61;       /* #2a333d */
+    --gold-rgb: 201 161 59;         /* #c9a13b */
+    --on-accent-rgb: 15 20 24;      /* #0f1418 — dark text on the light accent */
+    --scrim-rgb: 0 0 0;             /* #000000 */
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg-rgb: 15 20 24;             /* #0f1418 */
+  --surface-rgb: 22 28 34;        /* #161c22 */
+  --surface-2-rgb: 29 37 45;      /* #1d252d */
+  --ink-rgb: 232 237 242;         /* #e8edf2 */
+  --muted-rgb: 170 180 191;       /* #aab4bf */
+  --faint-rgb: 139 150 163;       /* #8b96a3 */
+  --line-rgb: 42 51 61;           /* #2a333d */
+  --line-strong-rgb: 58 69 82;    /* #3a4552 */
+  --accent-rgb: 226 164 104;      /* #e2a468 */
+  --accent-soft-rgb: 58 42 23;    /* #3a2a17 */
+  --steel-rgb: 143 184 224;       /* #8fb8e0 */
+  --ok-rgb: 127 207 164;          /* #7fcfa4 */
+  --warn-rgb: 224 189 106;        /* #e0bd6a */
+  --crit-rgb: 240 140 120;        /* #f08c78 */
+  --ok-soft-rgb: 22 49 38;        /* #163126 */
+  --warn-soft-rgb: 58 47 18;      /* #3a2f12 */
+  --crit-soft-rgb: 61 31 26;      /* #3d1f1a */
+  --steel-soft-rgb: 27 42 58;     /* #1b2a3a */
+  --ink-soft-rgb: 42 51 61;       /* #2a333d */
+  --gold-rgb: 201 161 59;         /* #c9a13b */
+  --on-accent-rgb: 15 20 24;      /* #0f1418 — dark text on the light accent */
+  --scrim-rgb: 0 0 0;             /* #000000 */
 }
 
 @layer base {
@@ -48,7 +155,9 @@
     @apply inline-flex items-center justify-center gap-2 rounded font-medium text-sm px-3.5 py-2 transition-colors;
   }
   .btn-primary {
-    @apply btn bg-accent text-white hover:opacity-90;
+    /* on-accent flips with the theme: white on the brown accent by day,
+       near-black on the light amber accent at night. */
+    @apply btn bg-accent text-on-accent hover:opacity-90;
   }
   .btn-ghost {
     @apply btn border border-line-strong text-ink bg-surface hover:bg-surface-2;

@@ -9,6 +9,7 @@ import { requireUser } from '@/lib/rbac';
 import { analyticsData } from '@/lib/queries';
 import { NAV, NAV_GROUPS } from '@/lib/nav-labels';
 import { MonthlyBars, HBarList } from '@/components/charts';
+import { AskAiLink } from '@/components/app-shell';
 
 export const metadata = { title: 'Reports' };
 
@@ -90,7 +91,7 @@ export default async function AnalyticsPage() {
         <Card title="Money to collect" sub={d.aging.total > 0.5 ? `${formatINR(d.aging.total)} still due` : undefined}>
           <div className="space-y-2.5 text-sm">
             <AgingRow label="Not yet due" value={d.aging.current} total={d.aging.total} tone="bg-steel/70" />
-            <AgingRow label="1–30 days late" value={d.aging.d30} total={d.aging.total} tone="bg-[#c9a13b]" />
+            <AgingRow label="1–30 days late" value={d.aging.d30} total={d.aging.total} tone="bg-gold" />
             <AgingRow label="31–60 days late" value={d.aging.d60} total={d.aging.total} tone="bg-warn" />
             <AgingRow label="Over 60 days late" value={d.aging.d60plus} total={d.aging.total} tone="bg-crit" />
           </div>
@@ -172,6 +173,20 @@ export default async function AnalyticsPage() {
         <p className="text-xs text-muted mt-3">From bills issued this year (cancelled ones left out). For reference only — check against your filed returns.</p>
       </Card>
 
+      <section className="card p-4 mt-5 border-accent/40" aria-labelledby="ask-reports">
+        <h2 id="ask-reports" className="text-sm font-medium mb-2 flex items-center gap-1.5"><span className="text-accent" aria-hidden>✦</span> Ask AI about these numbers</h2>
+        <div className="flex flex-wrap gap-1.5">
+          {[
+            'Why is this month’s billing different from last month?',
+            'Which customers are late paying, and how late?',
+            'Which quotations from the last 60 days never became orders?',
+            'Which items do we quote most often, and at what rate?',
+            'Kaunse customers se is saal sabse zyada billing hui?',
+          ].map((q) => (
+            <AskAiLink key={q} question={q} className="text-xs px-2.5 py-1.5 min-h-11 sm:min-h-0 rounded-full border border-line bg-surface hover:border-accent/50 hover:bg-accent-soft/40 transition-colors text-ink">{q}</AskAiLink>
+          ))}
+        </div>
+      </section>
       <div className="mt-5"><Link href={NAV.dashboard.href} className="text-steel text-sm hover:underline">← {NAV.dashboard.label}</Link></div>
     </div>
   );

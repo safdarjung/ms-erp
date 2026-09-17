@@ -12,8 +12,10 @@ export default function manifest(): MetadataRoute.Manifest {
     scope: '/',
     display: 'standalone',
     orientation: 'portrait-primary',
+    // Splash + title-bar colours for the installed app (a manifest cannot follow
+    // the theme; the in-page <meta theme-color> takes over once loaded).
     background_color: '#eaeef2',
-    theme_color: '#141a21',
+    theme_color: '#eaeef2',
     icons: [
       { src: '/app-icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any' },
       { src: '/app-icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'maskable' },

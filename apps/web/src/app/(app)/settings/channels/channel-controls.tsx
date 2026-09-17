@@ -81,7 +81,7 @@ export function ChannelEditor({ channel, users }: { channel: ChannelView; users:
     <div className="card p-4">
       <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
         <h2 className="font-medium text-ink">{channel.name}</h2>
-        <span className={`pill ${channel.enabled && channel.inboundReady ? 'bg-[#e4f1ea] text-ok' : 'bg-surface-2 text-muted'}`}>
+        <span className={`pill ${channel.enabled && channel.inboundReady ? 'bg-ok-soft text-ok' : 'bg-surface-2 text-muted'}`}>
           {!channel.inboundReady ? 'Not receiving yet' : channel.enabled ? 'On' : 'Off'}
         </span>
       </div>

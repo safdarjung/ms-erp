@@ -1,6 +1,8 @@
 import 'server-only';
+import { aiEnabled, extractLeadFromEmail } from '@ms/ai';
 import { withTenant, inboundMessage, lead, auditLog, eq, or, sql, type Tx } from '@ms/db';
 import { createLeadRecord } from '../documents';
+import { recordAiUsage } from '../ai';
 import type { Channel, InboundEmail, ExtractedLead, IngestOutcome, StoredAttachment } from './types';
 import { parseMarketplaceEmail } from './parse-marketplace';
 import { isBulk } from './spam';
@@ -25,6 +27,55 @@ function bestEffortDraft(email: InboundEmail): ExtractedLead {
     requirement: [subject, text.slice(0, 500)].filter(Boolean).join(' — ') || null,
     source: 'Email',
   };
+}
+
+// Below this the model's own confidence that a free-form mail is a real
+// enquiry is treated as "not sure" — the mail still waits for a human, only
+// with whatever fields could be read. Above NOT_ENQUIRY_MIN the model may say
+// "this is a newsletter / notification" and the mail is parked as dismissed
+// (recoverable from the inbox).
+const AI_MIN_CONFIDENCE = 0.35;
+const AI_NOT_ENQUIRY_MIN = 0.8;
+
+type AiRead =
+  | { kind: 'draft'; draft: ExtractedLead; confidence: number }
+  | { kind: 'not_enquiry'; confidence: number }
+  | null;
+
+/**
+ * Read a free-form (non-marketplace) email with the model, outside any DB
+ * transaction. Best-effort: any failure means "no AI reading" and the
+ * deterministic draft is used instead. The model only reads — the enquiry is
+ * still created by a person on the review screen.
+ */
+async function aiRead(tenantId: string, email: InboundEmail, fallback: ExtractedLead): Promise<AiRead> {
+  if (!aiEnabled()) return null;
+  const text = (email.text && email.text.trim()) ? email.text : (email.html ? email.html.replace(/<[^>]+>/g, ' ') : '');
+  if (!text.trim() && !email.subject) return null;
+  try {
+    const { draft, usage, model } = await extractLeadFromEmail({
+      subject: email.subject, fromName: email.fromName, fromEmail: email.fromEmail, text,
+    });
+    recordAiUsage(tenantId, SYSTEM_USER_ID, 'extract', model, usage);
+    if (!draft.isEnquiry && draft.confidence >= AI_NOT_ENQUIRY_MIN) return { kind: 'not_enquiry', confidence: draft.confidence };
+    if (draft.confidence < AI_MIN_CONFIDENCE && !draft.phone && !draft.requirement) return null;
+    // Prefer what the model read; keep the deterministic fallback for anything it left blank.
+    return {
+      kind: 'draft', confidence: draft.confidence,
+      draft: {
+        customerName: (draft.customerName || fallback.customerName).slice(0, 200),
+        contact: draft.contact || fallback.contact || null,
+        phone: draft.phone || fallback.phone || null,
+        email: draft.email || fallback.email || null,
+        requirement: (draft.requirement || fallback.requirement || null)?.slice(0, 2000) ?? null,
+        source: 'Email',
+        valueEstimate: draft.valueEstimate > 0 ? draft.valueEstimate : null,
+      },
+    };
+  } catch (e) {
+    console.error('ai lead extraction failed:', e);
+    return null;
+  }
 }
 
 /** Upload each attachment to Supabase Storage (best-effort); returns stored metadata. */
@@ -67,6 +118,11 @@ export async function ingestEmail(channel: Channel, email: InboundEmail): Promis
   const tenantId = channel.tenantId;
   // Upload attachments first (outside the DB tx) so no connection is held during network I/O.
   const attachments = await storeAttachments(tenantId, email);
+  // Same for the model: decide up front whether this is a marketplace mail
+  // (deterministic parser) or bulk mail, and only ask the model about the rest.
+  const mkEarly = parseMarketplaceEmail(email);
+  const bulkEarly = mkEarly ? null : isBulk(email, channel.config);
+  const ai = !mkEarly && bulkEarly && !bulkEarly.bulk ? await aiRead(tenantId, email, bestEffortDraft(email)) : null;
   return withTenant(tenantId, SYSTEM_USER_ID, async (tx) => {
     // 1. idempotent insert
     const inserted = await tx.insert(inboundMessage).values({
@@ -90,30 +146,45 @@ export async function ingestEmail(channel: Channel, email: InboundEmail): Promis
 
     try {
       // 2. marketplace template parse (bypasses the spam gate — these ARE leads)
-      const mk = parseMarketplaceEmail(email);
+      const mk = mkEarly;
       let draft: ExtractedLead;
-      let parseMethod: 'template' | 'none';
+      let parseMethod: 'template' | 'ai' | 'none';
+      let confidence: string | null = null;
       if (mk) {
         draft = mk.lead;
         parseMethod = 'template';
       } else {
         // 3. non-marketplace → deterministic bulk/newsletter gate
-        const bulk = isBulk(email, channel.config);
+        const bulk = bulkEarly ?? isBulk(email, channel.config);
         if (bulk.bulk) {
           await tx.update(inboundMessage)
             .set({ status: 'spam', dedupeReason: bulk.reason ?? null, updatedAt: new Date() })
             .where(eq(inboundMessage.id, inboundId));
           return { status: 'spam', inboundId };
         }
-        draft = bestEffortDraft(email);
-        parseMethod = 'none';
+        // 3b. the model read it and is sure it is not an enquiry → parked, recoverable
+        if (ai?.kind === 'not_enquiry') {
+          await tx.update(inboundMessage)
+            .set({ status: 'ignored', parseMethod: 'ai', confidence: ai.confidence.toFixed(3),
+              dedupeReason: 'AI read it as a newsletter, notification or other non-enquiry mail', updatedAt: new Date() })
+            .where(eq(inboundMessage.id, inboundId));
+          return { status: 'ignored', inboundId };
+        }
+        if (ai?.kind === 'draft') {
+          draft = ai.draft;
+          parseMethod = 'ai';
+          confidence = ai.confidence.toFixed(3);
+        } else {
+          draft = bestEffortDraft(email);
+          parseMethod = 'none';
+        }
       }
 
       // 4. dedupe vs existing leads
       const dupeLeadId = await findDuplicateLead(tx, draft);
       if (dupeLeadId) {
         await tx.update(inboundMessage).set({
-          status: 'duplicate', parsed: draft, parseMethod, leadId: dupeLeadId,
+          status: 'duplicate', parsed: draft, parseMethod, confidence, leadId: dupeLeadId,
           dedupeReason: 'matched an existing lead by phone/email', updatedAt: new Date(),
         }).where(eq(inboundMessage.id, inboundId));
         return { status: 'duplicate', inboundId, leadId: dupeLeadId };
@@ -139,7 +210,7 @@ export async function ingestEmail(channel: Channel, email: InboundEmail): Promis
       }
 
       await tx.update(inboundMessage)
-        .set({ status: 'pending', parsed: draft, parseMethod, updatedAt: new Date() })
+        .set({ status: 'pending', parsed: draft, parseMethod, confidence, updatedAt: new Date() })
         .where(eq(inboundMessage.id, inboundId));
       return { status: 'pending', inboundId };
     } catch (e) {

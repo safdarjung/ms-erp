@@ -9,6 +9,7 @@ import { formatDate } from '@/lib/format';
 import { StatusPill } from '@/components/status-pill';
 import { ConfirmButton } from '@/components/confirm-button';
 import { WhatsappButton } from '@/components/whatsapp-button';
+import { AskAiLink } from '@/components/app-shell';
 import { StageSelect } from '../stage-select';
 import { convertLeadToCustomerAction, deleteLeadAction } from '../actions';
 import { OwnerSelect, ActivityForm, LeadEditForm, ACTIVITY_LABELS } from '../lead-detail';
@@ -168,7 +169,16 @@ export default async function LeadDetail({ params }: { params: Promise<{ id: str
         </div>
       </div>
 
-      <div className="mt-5"><Link href="/leads" className="text-steel text-sm hover:underline">← All enquiries</Link></div>
+      <div className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-2">
+        <Link href="/leads" className="text-steel text-sm hover:underline">← All enquiries</Link>
+        {!closed && (
+          <>
+            <span className="text-xs text-muted">Ask AI:</span>
+            <AskAiLink question={`Write a WhatsApp reply to this enquiry from ${l.customerName} asking for the details we need to quote (drawing, quantity, material, delivery)`} className="text-xs text-accent hover:underline">✦ Reply asking for details</AskAiLink>
+            <AskAiLink question={`Write a short WhatsApp follow-up to this enquiry from ${l.customerName}`} className="text-xs text-accent hover:underline">✦ Follow-up message</AskAiLink>
+          </>
+        )}
+      </div>
     </div>
   );
 }

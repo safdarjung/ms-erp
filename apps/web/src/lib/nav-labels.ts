@@ -6,7 +6,8 @@ export type NavKey =
   | 'dashboard' | 'analytics'
   | 'leads' | 'inbox' | 'customers'
   | 'quotations' | 'orders' | 'invoices'
-  | 'users' | 'channels' | 'outreach' | 'password' | 'guide';
+  | 'search'
+  | 'users' | 'channels' | 'outreach' | 'ai' | 'password' | 'guide';
 
 export const NAV: Record<NavKey, { href: string; label: string }> = {
   dashboard: { href: '/dashboard', label: 'Home' },
@@ -17,9 +18,11 @@ export const NAV: Record<NavKey, { href: string; label: string }> = {
   quotations: { href: '/quotations', label: 'Quotations' },
   orders: { href: '/orders', label: 'Orders' },
   invoices: { href: '/invoices', label: 'Bills (invoices)' },
+  search: { href: '/search', label: 'Search' },
   users: { href: '/settings/users', label: 'Staff' },
   channels: { href: '/settings/channels', label: 'Email enquiry setup' },
   outreach: { href: '/settings/outreach', label: 'WhatsApp message' },
+  ai: { href: '/settings/ai', label: 'AI activity' },
   password: { href: '/settings/password', label: 'Change password' },
   guide: { href: '/guide', label: 'Help & guide' },
 };
