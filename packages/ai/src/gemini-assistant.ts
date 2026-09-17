@@ -1,9 +1,9 @@
 import { Type, type Content, type FunctionDeclaration, type Part, type Schema } from '@google/genai';
 import {
-  MAX_TOOL_ROUNDS, TOOL_META, runActionTool, runChartTool, runGetDocumentTool, runOpenPageTool, runQueryTool,
-  type AssistantContext, type AssistantEvent, type ChartSpec, type ChatTurn, type GetDocumentInput, type TurnState,
+  MAX_TOOL_ROUNDS, STUCK_MESSAGE, TOOL_META, dispatchTool, isTransientError, sleep,
+  type AssistantContext, type AssistantEvent, type ChatTurn, type TurnState,
 } from './assistant-core';
-import { ACTION_TOOLS, ACTION_TOOL_NAMES, GET_DOCUMENT_TOOL, OPEN_PAGE_TOOL, type ActionToolDef, type JsonSchemaProp } from './agent-tools';
+import { ACTION_TOOLS, GET_DOCUMENT_TOOL, INSTANT_TOOLS, OPEN_PAGE_TOOL, type ActionToolDef, type JsonSchemaProp } from './agent-tools';
 import { GEMINI_MODELS, addTokenUsage, gemini, isGeminiRateLimit, usageFromGemini } from './gemini';
 import { emptyUsage } from './models';
 import { ASSISTANT_SYSTEM_PROMPT } from './schema-context';
@@ -60,9 +60,12 @@ const FUNCTIONS: FunctionDeclaration[] = [
     },
   },
   toGeminiFunction(GET_DOCUMENT_TOOL),
+  ...INSTANT_TOOLS.map(toGeminiFunction),
   toGeminiFunction(OPEN_PAGE_TOOL),
   ...ACTION_TOOLS.map(toGeminiFunction),
 ];
+
+const RETRY_DELAY_MS = 900;
 
 /** The ask-your-data agent loop on Gemini — same event protocol as the Claude loop. */
 export async function* runGeminiAssistant(
@@ -98,17 +101,25 @@ export async function* runGeminiAssistant(
   // primary rate-limits (user preference: 3.5-flash-lite → 3.1-flash-lite).
   let model: string = GEMINI_MODELS.primary;
   const state: TurnState = { chartShown: false, actionPending: false };
+  let spoke = false;
+  let exhausted = true;
+
+  /** Open the stream: one quiet retry on a transient blip, fallback model on 429. */
+  const openStream = async () => {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await ai.models.generateContentStream({ model, contents, config });
+      } catch (e) {
+        if (ctx.signal?.aborted) throw e;
+        if (isGeminiRateLimit(e) && model === GEMINI_MODELS.primary) { model = GEMINI_MODELS.fallback; continue; }
+        if (attempt === 0 && isTransientError(e)) { await sleep(RETRY_DELAY_MS); continue; }
+        throw e;
+      }
+    }
+  };
 
   for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
-    let stream;
-    try {
-      stream = await ai.models.generateContentStream({ model, contents, config });
-    } catch (e) {
-      if (isGeminiRateLimit(e) && model === GEMINI_MODELS.primary) {
-        model = GEMINI_MODELS.fallback;
-        stream = await ai.models.generateContentStream({ model, contents, config });
-      } else throw e;
-    }
+    const stream = await openStream();
 
     // Echo the model turn back EXACTLY as streamed — Gemini 3.x attaches a
     // thoughtSignature to functionCall parts and rejects follow-up requests
@@ -120,7 +131,7 @@ export async function* runGeminiAssistant(
     for await (const chunk of stream) {
       for (const part of chunk.candidates?.[0]?.content?.parts ?? []) {
         modelParts.push(part);
-        if (part.text && !part.thought) yield { type: 'text', delta: part.text };
+        if (part.text && !part.thought) { spoke = true; yield { type: 'text', delta: part.text }; }
         if (part.functionCall) {
           calls.push({
             id: part.functionCall.id,
@@ -133,43 +144,21 @@ export async function* runGeminiAssistant(
     }
     addTokenUsage(usage, roundUsage);
 
-    if (!calls.length) break;
+    if (!calls.length) { exhausted = false; break; }
 
     contents.push({ role: 'model', parts: modelParts });
 
     const responseParts: Part[] = [];
     for (const c of calls) {
-      let payload: Record<string, unknown>;
-      if (c.name === TOOL_META.query.name) {
-        const out = await runQueryTool(c.args as { sql?: string; title?: string }, ctx.executeQuery);
-        for (const ev of out.events) yield ev;
-        payload = out.payload;
-      } else if (c.name === TOOL_META.chart.name) {
-        const out = runChartTool(c.args as Partial<ChartSpec>, state.chartShown);
-        state.chartShown = out.chartShown;
-        for (const ev of out.events) yield ev;
-        payload = out.payload;
-      } else if (c.name === OPEN_PAGE_TOOL.name) {
-        const out = runOpenPageTool((c.args ?? {}) as { page?: string; id?: string });
-        for (const ev of out.events) yield ev;
-        payload = out.payload;
-      } else if (c.name === GET_DOCUMENT_TOOL.name) {
-        const out = await runGetDocumentTool((c.args ?? {}) as GetDocumentInput, ctx);
-        for (const ev of out.events) yield ev;
-        payload = out.payload;
-      } else if (c.name && ACTION_TOOL_NAMES.has(c.name)) {
-        const out = await runActionTool(c.name, (c.args ?? {}) as Record<string, unknown>, ctx, state);
-        for (const ev of out.events) yield ev;
-        payload = out.payload;
-      } else {
-        payload = { error: 'Unknown tool.' };
-      }
+      const out = await dispatchTool(c.name, (c.args ?? {}) as Record<string, unknown>, ctx, state);
+      for (const ev of out.events) yield ev;
       responseParts.push({
-        functionResponse: { name: c.name ?? 'unknown', response: payload, ...(c.id ? { id: c.id } : {}) },
+        functionResponse: { name: c.name ?? 'unknown', response: out.payload, ...(c.id ? { id: c.id } : {}) },
       });
     }
     contents.push({ role: 'user', parts: responseParts });
   }
 
+  if (exhausted && !spoke) yield { type: 'text', delta: STUCK_MESSAGE };
   yield { type: 'done', usage, model };
 }

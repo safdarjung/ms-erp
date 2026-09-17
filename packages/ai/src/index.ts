@@ -12,9 +12,14 @@ export {
 export type {
   AssistantEvent, AssistantContext, ChatTurn, ChartSpec, QueryResult, StagedAction, StageResult, StagedDocMeta,
   EditField, EditItem, Attachment, AttachMime, GetDocumentInput, GetDocumentResult,
+  PriceHistoryInput, PriceHistoryResult, PriceHistoryLine, DraftMessageInput, DraftMessageResult, MessageDraft,
 } from './assistant-core';
-export { ACTION_TOOLS, ACTION_TOOL_NAMES, PAGE_TARGETS, DOCUMENT_TYPES } from './agent-tools';
-export type { DocumentType } from './agent-tools';
+export { ACTION_TOOLS, ACTION_TOOL_NAMES, PAGE_TARGETS, DOCUMENT_TYPES, MESSAGE_PURPOSES, INSTANT_TOOLS } from './agent-tools';
+export type { DocumentType, MessagePurpose } from './agent-tools';
+export { writeBriefing, briefingFactsText } from './briefing';
+export type { BriefingFacts } from './briefing';
+export { extractLeadFromEmail, extractedLeadSchema } from './extract-lead';
+export type { ExtractedLeadDraft } from './extract-lead';
 export { draftQuotation, quoteDraftSchema } from './quote-draft';
 export type { QuoteDraft, QuoteHistoryItem } from './quote-draft';
 export { polishProse } from './prose';

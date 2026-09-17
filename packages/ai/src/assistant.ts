@@ -2,10 +2,10 @@ import type Anthropic from '@anthropic-ai/sdk';
 import { activeProvider, anthropic } from './client';
 import { AI_MODELS, addUsage, emptyUsage } from './models';
 import { ASSISTANT_SYSTEM_PROMPT } from './schema-context';
-import { ACTION_TOOLS, ACTION_TOOL_NAMES, GET_DOCUMENT_TOOL, OPEN_PAGE_TOOL, type ActionToolDef } from './agent-tools';
+import { ACTION_TOOLS, GET_DOCUMENT_TOOL, INSTANT_TOOLS, OPEN_PAGE_TOOL, type ActionToolDef } from './agent-tools';
 import {
-  MAX_TOOL_ROUNDS, TOOL_META, runActionTool, runChartTool, runGetDocumentTool, runOpenPageTool, runQueryTool,
-  type AssistantContext, type AssistantEvent, type ChartSpec, type ChatTurn, type GetDocumentInput, type TurnState,
+  MAX_TOOL_ROUNDS, STUCK_MESSAGE, TOOL_META, dispatchTool,
+  type AssistantContext, type AssistantEvent, type ChatTurn, type TurnState,
 } from './assistant-core';
 import { runGeminiAssistant } from './gemini-assistant';
 
@@ -53,6 +53,7 @@ const TOOLS: Anthropic.Messages.ToolUnion[] = [
     },
   },
   toAnthropicTool(GET_DOCUMENT_TOOL),
+  ...INSTANT_TOOLS.map(toAnthropicTool),
   toAnthropicTool(OPEN_PAGE_TOOL),
   ...ACTION_TOOLS.map(toAnthropicTool),
 ];
@@ -119,6 +120,8 @@ async function* runClaudeAssistant(
   );
 
   const state: TurnState = { chartShown: false, actionPending: false };
+  let spoke = false;
+  let exhausted = true;
 
   for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
     const stream = client.messages.stream(
@@ -135,6 +138,7 @@ async function* runClaudeAssistant(
 
     for await (const ev of stream) {
       if (ev.type === 'content_block_delta' && ev.delta.type === 'text_delta') {
+        spoke = true;
         yield { type: 'text', delta: ev.delta.text };
       }
     }
@@ -142,47 +146,17 @@ async function* runClaudeAssistant(
     const msg = await stream.finalMessage();
     addUsage(usage, msg.usage);
 
-    if (msg.stop_reason !== 'tool_use') break;
+    if (msg.stop_reason !== 'tool_use') { exhausted = false; break; }
 
     const toolUses = msg.content.filter((b): b is Anthropic.Messages.ToolUseBlock => b.type === 'tool_use');
     const results: Anthropic.Messages.ToolResultBlockParam[] = [];
 
     for (const tu of toolUses) {
-      let payload: Record<string, unknown>;
-      let isError: boolean;
-      if (tu.name === TOOL_META.query.name) {
-        const out = await runQueryTool(tu.input as { sql?: string; title?: string }, ctx.executeQuery);
-        for (const ev of out.events) yield ev;
-        payload = out.payload;
-        isError = out.isError;
-      } else if (tu.name === TOOL_META.chart.name) {
-        const out = runChartTool(tu.input as Partial<ChartSpec>, state.chartShown);
-        state.chartShown = out.chartShown;
-        for (const ev of out.events) yield ev;
-        payload = out.payload;
-        isError = out.isError;
-      } else if (tu.name === OPEN_PAGE_TOOL.name) {
-        const out = runOpenPageTool(tu.input as { page?: string; id?: string });
-        for (const ev of out.events) yield ev;
-        payload = out.payload;
-        isError = out.isError;
-      } else if (tu.name === GET_DOCUMENT_TOOL.name) {
-        const out = await runGetDocumentTool(tu.input as GetDocumentInput, ctx);
-        for (const ev of out.events) yield ev;
-        payload = out.payload;
-        isError = out.isError;
-      } else if (ACTION_TOOL_NAMES.has(tu.name)) {
-        const out = await runActionTool(tu.name, tu.input as Record<string, unknown>, ctx, state);
-        for (const ev of out.events) yield ev;
-        payload = out.payload;
-        isError = out.isError;
-      } else {
-        payload = { error: 'Unknown tool.' };
-        isError = true;
-      }
+      const out = await dispatchTool(tu.name, tu.input as Record<string, unknown>, ctx, state);
+      for (const ev of out.events) yield ev;
       results.push({
-        type: 'tool_result', tool_use_id: tu.id, is_error: isError,
-        content: JSON.stringify(payload),
+        type: 'tool_result', tool_use_id: tu.id, is_error: out.isError,
+        content: JSON.stringify(out.payload),
       });
     }
 
@@ -190,5 +164,6 @@ async function* runClaudeAssistant(
     messages.push({ role: 'user', content: results });
   }
 
+  if (exhausted && !spoke) yield { type: 'text', delta: STUCK_MESSAGE };
   yield { type: 'done', usage, model: AI_MODELS.chat };
 }

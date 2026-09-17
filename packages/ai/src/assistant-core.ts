@@ -1,5 +1,8 @@
 import { guardAnalyticsSql } from './sql-guard';
-import { ACTION_TOOLS, resolvePage } from './agent-tools';
+import {
+  ACTION_TOOLS, ACTION_TOOL_NAMES, DRAFT_MESSAGE_TOOL, GET_DOCUMENT_TOOL, OPEN_PAGE_TOOL, PRICE_HISTORY_TOOL,
+  resolvePage, type MessagePurpose,
+} from './agent-tools';
 import type { TokenUsage } from './models';
 
 // ── Provider-neutral protocol between the assistant loops and the UI ────────
@@ -75,12 +78,48 @@ export type GetDocumentResult =
   | { ok: true; document: Record<string, unknown> }
   | { ok: false; error: string };
 
+/** price_history lookup — the web layer reads past quotation / bill lines. */
+export type PriceHistoryInput = { q?: string; customerId?: string; limit?: number };
+export type PriceHistoryLine = {
+  date: string; customer: string; document: string; description: string;
+  qty: number; uom: string; rate: number; gstRate: number; part?: string | null;
+};
+export type PriceHistoryResult =
+  | { ok: true; lines: PriceHistoryLine[]; stats: { count: number; latest?: number; min?: number; max?: number; median?: number } }
+  | { ok: false; error: string };
+
+/** draft_message — the web layer resolves the recipient and builds the links. */
+export type DraftMessageInput = {
+  purpose?: string; customerId?: string; leadId?: string; phone?: string;
+  text?: string; subject?: string; documentType?: string; documentId?: string;
+};
+/** A prepared message the user sends themselves (nothing is sent by the app). */
+export type MessageDraft = {
+  purpose: MessagePurpose;
+  /** Who it is addressed to, for the card header ("Sharma Auto · 98123 45678"). */
+  recipient: { name: string; phone?: string; email?: string; kind: 'customer' | 'lead' | 'phone' };
+  text: string;
+  subject?: string;
+  /** wa.me deep link with the text pre-filled (absent when no usable phone). */
+  whatsappUrl?: string;
+  /** mailto: link with subject + body (absent when no email). */
+  mailtoUrl?: string;
+  /** Public PDF link that was inserted, if any. */
+  pdfLink?: string;
+  /** Document the link points to, for the card ("Quotation QT/26-27/0012"). */
+  documentLabel?: string;
+};
+export type DraftMessageResult =
+  | { ok: true; message: MessageDraft }
+  | { ok: false; error: string };
+
 export type AssistantEvent =
   | { type: 'text'; delta: string }
   | { type: 'tool'; label: string }
   | { type: 'table'; title: string; columns: string[]; rows: QueryResult['rows'] }
   | { type: 'chart'; spec: ChartSpec }
   | { type: 'action'; action: StagedAction }
+  | { type: 'message'; message: MessageDraft }
   | { type: 'nav'; path: string; label: string; newTab: boolean }
   | { type: 'done'; usage: TokenUsage; model: string }
   | { type: 'error'; message: string };
@@ -127,6 +166,10 @@ export type AssistantContext = {
   stageAction: (kind: string, input: Record<string, unknown>) => Promise<StageResult>;
   /** Read one document in full for the model (tenant-scoped). */
   getDocument: (input: GetDocumentInput) => Promise<GetDocumentResult>;
+  /** Past rates for similar items (tenant-scoped, read-only). */
+  priceHistory: (input: PriceHistoryInput) => Promise<PriceHistoryResult>;
+  /** Resolve a recipient + build WhatsApp / mail links for a drafted message. */
+  draftMessage: (input: DraftMessageInput) => Promise<DraftMessageResult>;
   signal?: AbortSignal;
 };
 
@@ -160,6 +203,9 @@ export type ToolOutcome = {
   isError: boolean;
 };
 
+const errorOutcome = (error: string, events: AssistantEvent[] = []): ToolOutcome => ({ events, isError: true, payload: { error } });
+const errMsg = (e: unknown, fallback: string) => (e instanceof Error ? e.message : fallback);
+
 /** Guard + execute the analytics query tool; provider loops surface the result. */
 export async function runQueryTool(
   input: { sql?: string; title?: string },
@@ -170,10 +216,7 @@ export async function runQueryTool(
 
   const guarded = guardAnalyticsSql(input.sql ?? '');
   if (!guarded.ok) {
-    return {
-      events, isError: true,
-      payload: { error: `Query rejected: ${guarded.reason}. Rewrite the SQL following the rules and try again.` },
-    };
+    return errorOutcome(`Query rejected: ${guarded.reason}. Rewrite the SQL following the rules and try again.`, events);
   }
   try {
     const res = await executeQuery(guarded.wrapped);
@@ -190,10 +233,7 @@ export async function runQueryTool(
       },
     };
   } catch (e) {
-    return {
-      events, isError: true,
-      payload: { error: `Query failed: ${e instanceof Error ? e.message : 'unknown error'}. Fix the SQL and retry.` },
-    };
+    return errorOutcome(`Query failed: ${errMsg(e, 'unknown error')}. Fix the SQL and retry.`, events);
   }
 }
 
@@ -227,17 +267,74 @@ export async function runGetDocumentTool(input: GetDocumentInput, ctx: Assistant
   const events: AssistantEvent[] = [{ type: 'tool', label }];
   try {
     const res = await ctx.getDocument(input);
-    if (!res.ok) return { events, isError: true, payload: { error: res.error } };
+    if (!res.ok) return errorOutcome(res.error, events);
     return { events, isError: false, payload: res.document };
   } catch (e) {
-    return { events, isError: true, payload: { error: `Could not read the document: ${e instanceof Error ? e.message : 'unknown error'}` } };
+    return errorOutcome(`Could not read the document: ${errMsg(e, 'unknown error')}`, events);
+  }
+}
+
+/** Handle price_history: read-only, instant; the user also sees the table. */
+export async function runPriceHistoryTool(input: PriceHistoryInput, ctx: AssistantContext): Promise<ToolOutcome> {
+  const q = (input.q ?? '').trim();
+  const events: AssistantEvent[] = [{ type: 'tool', label: `Past rates for “${q || '…'}”` }];
+  if (!q) return errorOutcome('Pass a few words of the item in q (e.g. "blanking die").', events);
+  try {
+    const res = await ctx.priceHistory({ ...input, q, limit: Math.min(Math.max(1, input.limit ?? 12), 30) });
+    if (!res.ok) return errorOutcome(res.error, events);
+    if (res.lines.length) {
+      events.push({
+        type: 'table',
+        title: `Past rates — ${q}`,
+        columns: ['date', 'customer', 'document', 'item', 'qty', 'rate', 'gst_%'],
+        rows: res.lines.map((l) => [l.date, l.customer, l.document, l.description + (l.part ? ` (${l.part})` : ''), `${l.qty} ${l.uom}`, l.rate, l.gstRate]),
+      });
+    }
+    return {
+      events, isError: false,
+      payload: {
+        lines: res.lines, stats: res.stats,
+        note: res.lines.length
+          ? 'Rates are ex-GST per unit. Anchor a new rate on the latest/median and mention the precedent to the user ("last time ₹30,000 for Sharma Auto").'
+          : 'No past line matches those words — try fewer or different words, or price with judgment and say so.',
+      },
+    };
+  } catch (e) {
+    return errorOutcome(`Could not read past rates: ${errMsg(e, 'unknown error')}`, events);
+  }
+}
+
+/** Handle draft_message: resolve the recipient, build links, show the message card. */
+export async function runDraftMessageTool(input: DraftMessageInput, ctx: AssistantContext): Promise<ToolOutcome> {
+  const events: AssistantEvent[] = [{ type: 'tool', label: 'Preparing the message' }];
+  if (!(input.text ?? '').trim()) return errorOutcome('Write the message text in `text` first.', events);
+  try {
+    const res = await ctx.draftMessage(input);
+    if (!res.ok) return errorOutcome(res.error, events);
+    events.push({ type: 'message', message: res.message });
+    const m = res.message;
+    return {
+      events, isError: false,
+      payload: {
+        shown: true,
+        recipient: m.recipient.name,
+        whatsapp: !!m.whatsappUrl, email: !!m.mailtoUrl, pdfLink: m.pdfLink ?? null,
+        note:
+          'The message card is on the user’s screen with ' +
+          [m.whatsappUrl ? 'a WhatsApp button' : null, m.mailtoUrl ? 'an email button' : null, 'Copy'].filter(Boolean).join(', ') +
+          '. Nothing has been sent. Tell the user in one short sentence to check it and tap the button; do not repeat the message text.' +
+          (!m.whatsappUrl && !m.mailtoUrl ? ' They have no phone or email on record — suggest adding one, or they can copy the text.' : ''),
+      },
+    };
+  } catch (e) {
+    return errorOutcome(`Could not prepare the message: ${errMsg(e, 'unknown error')}`, events);
   }
 }
 
 /** Handle open_page: resolve, surface a nav event, tell the model it happened. */
 export function runOpenPageTool(input: { page?: string; id?: string }): ToolOutcome {
   const nav = resolvePage(input);
-  if ('error' in nav) return { events: [], isError: true, payload: { error: nav.error } };
+  if ('error' in nav) return errorOutcome(nav.error);
   return {
     events: [{ type: 'nav', path: nav.path, label: nav.label, newTab: nav.newTab }],
     isError: false,
@@ -256,7 +353,7 @@ export async function runActionTool(
   state: TurnState,
 ): Promise<ToolOutcome> {
   const permission = ACTION_PERMISSION.get(name);
-  if (permission === undefined) return { events: [], isError: true, payload: { error: 'Unknown tool.' } };
+  if (permission === undefined) return errorOutcome('Unknown tool.');
   if (permission && !ctx.permissions.has(permission)) {
     return {
       events: [], isError: true,
@@ -267,14 +364,11 @@ export async function runActionTool(
     };
   }
   if (state.actionPending) {
-    return {
-      events: [], isError: true,
-      payload: { error: 'A card is already waiting for the user to tap Yes. Do not propose another one — end your reply.' },
-    };
+    return errorOutcome('A card is already waiting for the user to tap Yes. Do not propose another one — end your reply.');
   }
 
   const staged = await ctx.stageAction(name, input);
-  if (!staged.ok) return { events: [], isError: true, payload: { error: staged.error } };
+  if (!staged.ok) return errorOutcome(staged.error);
 
   state.actionPending = true;
   return {
@@ -315,3 +409,54 @@ export function runChartTool(
     payload: { result: 'Chart shown to the user.' },
   };
 }
+
+/**
+ * Route one tool call to its handler. Both provider loops (Claude, Gemini) go
+ * through here so a new tool is wired in exactly one place.
+ */
+export async function dispatchTool(
+  name: string | undefined,
+  args: Record<string, unknown>,
+  ctx: AssistantContext,
+  state: TurnState,
+): Promise<ToolOutcome> {
+  switch (name) {
+    case TOOL_META.query.name:
+      return runQueryTool(args as { sql?: string; title?: string }, ctx.executeQuery);
+    case TOOL_META.chart.name: {
+      const out = runChartTool(args as Partial<ChartSpec>, state.chartShown);
+      state.chartShown = out.chartShown;
+      return out;
+    }
+    case OPEN_PAGE_TOOL.name:
+      return runOpenPageTool(args as { page?: string; id?: string });
+    case GET_DOCUMENT_TOOL.name:
+      return runGetDocumentTool(args as GetDocumentInput, ctx);
+    case PRICE_HISTORY_TOOL.name:
+      return runPriceHistoryTool(args as PriceHistoryInput, ctx);
+    case DRAFT_MESSAGE_TOOL.name:
+      return runDraftMessageTool(args as DraftMessageInput, ctx);
+    default:
+      if (name && ACTION_TOOL_NAMES.has(name)) return runActionTool(name, args, ctx, state);
+      // A hallucinated tool name — tell the model what exists so it can correct itself.
+      console.warn('assistant: unknown tool called:', name, JSON.stringify(args).slice(0, 200));
+      return errorOutcome(
+        `There is no tool called "${name}". To prepare a WhatsApp/email message use draft_message; to read past rates use price_history; ` +
+        'to read a document use get_document; to change data use the create_/update_/set_/convert_ tools.',
+      );
+  }
+}
+
+/** Provider errors worth one quiet retry (overloaded / brief network blip). */
+export function isTransientError(e: unknown): boolean {
+  const status = Number((e as { status?: number })?.status ?? (e as { code?: number })?.code);
+  if ([500, 502, 503, 504].includes(status)) return true;
+  const msg = String((e as Error)?.message ?? e).toLowerCase();
+  return /unavailable|overloaded|timed? ?out|econnreset|fetch failed|socket hang up|network/.test(msg);
+}
+
+export const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/** Said when the tool loop runs out of rounds before the model wrote anything — the user must never get a blank reply. */
+export const STUCK_MESSAGE =
+  'I got stuck looking that up and didn’t finish. Tell me the document number or the customer’s name and I’ll try again.';

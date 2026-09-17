@@ -490,6 +490,59 @@ export const GET_DOCUMENT_TOOL: ActionToolDef = {
   required: ['type'],
 };
 
+// ── Pricing memory (instant, not staged) ────────────────────────────────────
+
+export const PRICE_HISTORY_TOOL: ActionToolDef = {
+  name: 'price_history',
+  description:
+    'What this shop quoted or billed for similar items before — its pricing memory. Pass a few words of the item ' +
+    '("blanking die", "bending die 41928", "VMC machining bracket") and optionally the customer uuid. Returns the recent matching lines ' +
+    '(date, customer, document number, description, qty, unit, ex-GST rate, GST %) and the latest / lowest / median / highest rate. ' +
+    'Instant, no confirmation; the table is also shown to the user. Use it BEFORE proposing rates on a new quotation or copy, and to answer ' +
+    '"what did we charge X for Y last time?". Prefer it over SQL for anything about past rates.',
+  permission: '',
+  properties: {
+    q: { type: 'string', description: 'Item words to match in past line descriptions (any order), e.g. "blanking die"' },
+    customerId: uuidOptional('customer to restrict to'),
+    limit: { type: 'integer', description: 'Max lines to return (default 12, max 30)' },
+  },
+  required: ['q'],
+};
+
+// ── Message drafting (instant, not staged — nothing is ever sent by the app) ─
+
+export const MESSAGE_PURPOSES = ['quotation_followup', 'payment_reminder', 'delivery_update', 'thank_you', 'enquiry_reply', 'other'] as const;
+export type MessagePurpose = (typeof MESSAGE_PURPOSES)[number];
+
+export const DRAFT_MESSAGE_TOOL: ActionToolDef = {
+  name: 'draft_message',
+  description:
+    'Prepare a WhatsApp / email message to a customer or an enquiry contact — quotation follow-up, payment reminder, delivery update, ' +
+    'thank-you, reply to an enquiry, or anything the user asks. YOU write the message text (short, polite, Indian business tone, in the ' +
+    'language the user is using — Hinglish is fine). The app looks up the person\'s phone and email, turns {{pdf_link}} into a public link to the ' +
+    'referenced quotation / bill PDF, and shows the user a message card with a WhatsApp button, an email button and Copy. ' +
+    'The app NEVER sends anything itself — the user sends it from their own WhatsApp / mail. Instant, no confirmation. ' +
+    'Get the facts first (outstanding amount, quotation number, delivery date) with get_document / a query — never guess an amount.',
+  permission: '',
+  properties: {
+    purpose: { type: 'string', enum: [...MESSAGE_PURPOSES] },
+    customerId: uuidOptional('customer the message is for'),
+    leadId: uuidOptional('enquiry (lead) the message is for'),
+    phone: { type: 'string', description: 'Only when the person is not in the ERP — a phone number to send to' },
+    text: {
+      type: 'string',
+      description: 'The full message body as it should be sent. Put {{pdf_link}} where the PDF link should appear when a document is referenced. No placeholders other than {{pdf_link}}.',
+    },
+    subject: { type: 'string', description: 'Email subject line (optional; used only for the email button)' },
+    documentType: { type: 'string', enum: ['quotation', 'invoice'], description: 'Document whose PDF link goes in the message (with documentId)' },
+    documentId: uuidOptional('that quotation / invoice'),
+  },
+  required: ['purpose', 'text'],
+};
+
+/** Tools that run instantly (read-only or client-side) — never staged. */
+export const INSTANT_TOOLS: ActionToolDef[] = [PRICE_HISTORY_TOOL, DRAFT_MESSAGE_TOOL];
+
 // ── Navigation (instant, not staged) ────────────────────────────────────────
 
 export const PAGE_TARGETS = {
@@ -507,8 +560,17 @@ export const PAGE_TARGETS = {
   invoice: { path: '/invoices/:id', label: 'Invoice', needsId: true },
   print_quotation: { path: '/print/quotation/:id', label: 'Quotation PDF', needsId: true, newTab: true },
   print_invoice: { path: '/print/invoice/:id', label: 'Invoice PDF', needsId: true, newTab: true },
+  customer: { path: '/customers/:id', label: 'Customer', needsId: true },
+  new_customer: { path: '/customers?new=1', label: 'New customer form' },
+  lead: { path: '/leads/:id', label: 'Enquiry', needsId: true },
+  new_lead: { path: '/leads?new=1#new-enquiry', label: 'New enquiry form' },
+  lead_inbox: { path: '/leads/inbox', label: 'Email enquiries' },
+  analytics: { path: '/analytics', label: 'Reports' },
+  statement: { path: '/print/statement/:id', label: 'Statement of account PDF (id = customer)', needsId: true, newTab: true },
+  ai_activity: { path: '/settings/ai', label: 'AI activity & usage' },
   users: { path: '/settings/users', label: 'Users & roles' },
   change_password: { path: '/settings/password', label: 'Change password' },
+  guide: { path: '/guide', label: 'Help & guide' },
 } as const;
 
 export type PageKey = keyof typeof PAGE_TARGETS;
@@ -521,7 +583,7 @@ export const OPEN_PAGE_TOOL: ActionToolDef = {
   permission: '',
   properties: {
     page: { type: 'string', enum: Object.keys(PAGE_TARGETS) },
-    id: { type: 'string', description: 'Record UUID — required for quotation / invoice / print pages' },
+    id: { type: 'string', description: 'Record UUID — required for quotation / invoice / order / customer / enquiry / print / statement pages (statement takes the CUSTOMER uuid)' },
   },
   required: ['page'],
 };
