@@ -21,11 +21,12 @@ export const viewport: Viewport = {
   ],
 };
 
-// Runs before the first paint so a person who chose Light or Dark never sees
-// the other theme flash on load. Reads the same key the ThemeToggle writes
-// ('ms-theme'); any other value, or none, means "follow the phone's setting",
-// which is simply the absence of data-theme (globals.css handles the rest).
-const THEME_INIT = `(function(){try{var t=localStorage.getItem('ms-theme');if(t==='light'||t==='dark')document.documentElement.dataset.theme=t;}catch(e){}})();`;
+// Runs before the first paint so the remembered choice never flashes the wrong
+// theme. Reads the key the ThemeToggle writes ('ms-theme'): 'light'/'dark' are
+// pinned on <html>; 'system' (chosen explicitly) leaves data-theme off so CSS
+// follows the device; nothing stored means LIGHT — the app never turns itself
+// dark just because the phone is in dark mode.
+const THEME_INIT = `(function(){var r=document.documentElement;try{var t=localStorage.getItem('ms-theme');if(t==='light'||t==='dark'){r.dataset.theme=t;}else if(t!=='system'){r.dataset.theme='light';}}catch(e){r.dataset.theme='light';}})();`;
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (

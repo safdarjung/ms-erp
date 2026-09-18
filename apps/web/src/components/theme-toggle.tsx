@@ -2,9 +2,11 @@
 import { useCallback, useEffect, useSyncExternalStore } from 'react';
 
 /**
- * Light / Dark / Auto switch. "Auto" (the default) follows the phone or PC
- * setting; Light and Dark are remembered in localStorage['ms-theme'] and
- * restored before first paint by the inline script in app/layout.tsx.
+ * Light / Dark / Auto switch. **Light is the default** — the app never changes
+ * its own appearance because a phone happens to be in dark mode; dark is only
+ * ever shown when someone picks Dark (or picks Auto to follow the device).
+ * The choice is remembered in localStorage['ms-theme'] and restored before
+ * first paint by the inline script in app/layout.tsx.
  * The choice is `data-theme` on <html>; globals.css keys every colour off it.
  * No dependencies. Not mounted here — the app shell places it.
  */
@@ -16,14 +18,16 @@ export type ResolvedTheme = 'light' | 'dark';
 const STORAGE_KEY = 'ms-theme';
 const DARK_QUERY = '(prefers-color-scheme: dark)';
 /** What the server (and the first client render) assumes, to avoid hydration mismatches. */
-const SERVER_SNAPSHOT = 'system:light';
+const SERVER_SNAPSHOT = 'light:light';
 
 function readPreference(): ThemePreference {
   try {
     const v = localStorage.getItem(STORAGE_KEY);
-    return v === 'light' || v === 'dark' ? v : 'system';
+    // 'system' is stored only when the person actively chooses Auto; anything
+    // else (including nothing stored yet) means Light.
+    return v === 'light' || v === 'dark' || v === 'system' ? v : 'light';
   } catch {
-    return 'system';
+    return 'light';
   }
 }
 
@@ -97,8 +101,8 @@ export function useTheme(): {
 
   const setPreference = useCallback((next: ThemePreference) => {
     try {
-      if (next === 'system') localStorage.removeItem(STORAGE_KEY);
-      else localStorage.setItem(STORAGE_KEY, next);
+      // Auto is stored too — absence of a value must keep meaning Light.
+      localStorage.setItem(STORAGE_KEY, next);
     } catch {
       /* private mode / storage blocked: the choice still applies to this page view */
     }
@@ -112,7 +116,7 @@ export function useTheme(): {
 const OPTIONS: { value: ThemePreference; label: string; icon: string; hint: string }[] = [
   { value: 'light', label: 'Light', icon: '☀', hint: 'Always light' },
   { value: 'dark', label: 'Dark', icon: '☾', hint: 'Always dark' },
-  { value: 'system', label: 'Auto', icon: '◐', hint: 'Follow the phone setting' },
+  { value: 'system', label: 'Auto', icon: '◐', hint: 'Follow the phone / PC setting' },
 ];
 
 /** Compact three-way segmented control; every segment is a 44px thumb target. */
